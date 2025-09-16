@@ -1,0 +1,516 @@
+"use strict";
+/**
+ * Temporal Processor - Phase 2 AI Intelligence
+ * Processes temporal references in voice commands
+ *
+ * Success Criteria:
+ * - Handles "next Friday", "in 2 weeks", "tomorrow"
+ * - Timezone-aware date resolution
+ * - Business day calculations
+ * - 90%+ accuracy for common date expressions
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.TemporalProcessor = void 0;
+const logger_1 = require("../../utils/logger");
+class TemporalProcessor {
+    WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    MONTHS = [
+        'january', 'february', 'march', 'april', 'may', 'june',
+        'july', 'august', 'september', 'october', 'november', 'december'
+    ];
+    // Common time patterns
+    TIME_PATTERNS = [
+        // Relative days
+        { pattern: /\b(today|this day)\b/i, handler: this.handleToday.bind(this) },
+        { pattern: /\b(tomorrow|next day)\b/i, handler: this.handleTomorrow.bind(this) },
+        { pattern: /\b(yesterday|last day)\b/i, handler: this.handleYesterday.bind(this) },
+        // Relative weeks
+        { pattern: /\bnext (monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i, handler: this.handleNextWeekday.bind(this) },
+        { pattern: /\bthis (monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i, handler: this.handleThisWeekday.bind(this) },
+        { pattern: /\blast (monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i, handler: this.handleLastWeekday.bind(this) },
+        // Specific weekdays
+        { pattern: /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i, handler: this.handleWeekday.bind(this) },
+        // Week references
+        { pattern: /\bnext week\b/i, handler: this.handleNextWeek.bind(this) },
+        { pattern: /\bthis week\b/i, handler: this.handleThisWeek.bind(this) },
+        { pattern: /\blast week\b/i, handler: this.handleLastWeek.bind(this) },
+        // Month references
+        { pattern: /\bnext month\b/i, handler: this.handleNextMonth.bind(this) },
+        { pattern: /\bthis month\b/i, handler: this.handleThisMonth.bind(this) },
+        { pattern: /\blast month\b/i, handler: this.handleLastMonth.bind(this) },
+        // Relative time periods
+        { pattern: /\bin (\d+) (day|days)\b/i, handler: this.handleInDays.bind(this) },
+        { pattern: /\bin (\d+) (week|weeks)\b/i, handler: this.handleInWeeks.bind(this) },
+        { pattern: /\bin (\d+) (month|months)\b/i, handler: this.handleInMonths.bind(this) },
+        // By/before/after patterns
+        { pattern: /\bby (next )?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i, handler: this.handleByWeekday.bind(this) },
+        { pattern: /\bby (tomorrow|next week|next month)\b/i, handler: this.handleByRelative.bind(this) },
+        { pattern: /\bby the end of (this|next)? ?(week|month)\b/i, handler: this.handleByEndOf.bind(this) },
+        // Specific dates (basic)
+        { pattern: /\b(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})\b/, handler: this.handleNumericDate.bind(this) },
+        { pattern: /\b(january|february|march|april|may|june|july|august|september|october|november|december) (\d{1,2})\b/i, handler: this.handleMonthDay.bind(this) },
+        // Time specifications
+        { pattern: /\bat (\d{1,2}):(\d{2})\s?(am|pm|AM|PM)?\b/i, handler: this.handleTimeSpec.bind(this) },
+        { pattern: /\bat (\d{1,2})\s?(am|pm|AM|PM)\b/i, handler: this.handleSimpleTime.bind(this) },
+    ];
+    constructor() {
+        logger_1.logger.debug('Temporal Processor initialized');
+    }
+    /**
+     * Get current temporal context for a timezone
+     */
+    getCurrentTemporalContext(timezone = 'UTC') {
+        const now = new Date();
+        // Convert to specified timezone (simplified - in production use proper timezone library)
+        const currentTime = now.toISOString();
+        return {
+            currentTime,
+            timezone,
+            businessHours: {
+                start: '09:00',
+                end: '17:00'
+            },
+            workingDays: [1, 2, 3, 4, 5] // Monday to Friday
+        };
+    }
+    /**
+     * Resolve a date expression to actual date
+     */
+    async resolveDate(dateText, context) {
+        try {
+            const baseDate = new Date(context.currentTime);
+            const originalText = dateText.trim();
+            const lowerText = originalText.toLowerCase();
+            // Try each pattern
+            for (const { pattern, handler } of this.TIME_PATTERNS) {
+                const match = lowerText.match(pattern);
+                if (match) {
+                    const result = handler(match, baseDate);
+                    if (result) {
+                        logger_1.logger.debug('Date resolved', {
+                            originalText,
+                            resolvedDate: result.date.toISOString(),
+                            confidence: result.confidence,
+                            interpretation: result.interpretation
+                        });
+                        return {
+                            ...result,
+                            originalText
+                        };
+                    }
+                }
+            }
+            // Try natural language parsing as fallback
+            const fallbackResult = this.parseNaturalLanguageDate(lowerText, baseDate);
+            if (fallbackResult) {
+                return {
+                    ...fallbackResult,
+                    originalText
+                };
+            }
+            logger_1.logger.debug('Date resolution failed', { originalText });
+            return null;
+        }
+        catch (error) {
+            logger_1.logger.error('Date resolution error', {
+                dateText,
+                error: error.message
+            });
+            return null;
+        }
+    }
+    /**
+     * Parse multiple date references in text
+     */
+    async resolveDatesInText(text, context) {
+        const results = [];
+        const processedRanges = [];
+        // Find all potential date references
+        for (const { pattern } of this.TIME_PATTERNS) {
+            let match;
+            const regex = new RegExp(pattern.source, pattern.flags + 'g');
+            while ((match = regex.exec(text)) !== null) {
+                const start = match.index;
+                const end = start + match[0].length;
+                // Check if this range overlaps with already processed ranges
+                const overlaps = processedRanges.some(range => (start >= range.start && start <= range.end) ||
+                    (end >= range.start && end <= range.end));
+                if (!overlaps) {
+                    const dateText = match[0];
+                    const resolved = await this.resolveDate(dateText, context);
+                    if (resolved) {
+                        results.push(resolved);
+                        processedRanges.push({ start, end });
+                    }
+                }
+            }
+        }
+        return results;
+    }
+    /**
+     * Check if a date is a business day
+     */
+    isBusinessDay(date, context) {
+        const dayOfWeek = date.getDay(); // 0 = Sunday, 6 = Saturday
+        const adjustedDay = dayOfWeek === 0 ? 7 : dayOfWeek; // Convert to 1-7 scale
+        return context.workingDays.includes(adjustedDay);
+    }
+    /**
+     * Get next business day from a given date
+     */
+    getNextBusinessDay(date, context) {
+        const result = new Date(date);
+        do {
+            result.setDate(result.getDate() + 1);
+        } while (!this.isBusinessDay(result, context));
+        return result;
+    }
+    /**
+     * Add business days to a date
+     */
+    addBusinessDays(date, days, context) {
+        const result = new Date(date);
+        let addedDays = 0;
+        while (addedDays < days) {
+            result.setDate(result.getDate() + 1);
+            if (this.isBusinessDay(result, context)) {
+                addedDays++;
+            }
+        }
+        return result;
+    }
+    // Handler methods for different date patterns
+    handleToday(match, baseDate) {
+        return {
+            date: new Date(baseDate),
+            confidence: 1.0,
+            originalText: match[0],
+            interpretation: 'Today'
+        };
+    }
+    handleTomorrow(match, baseDate) {
+        const date = new Date(baseDate);
+        date.setDate(date.getDate() + 1);
+        return {
+            date,
+            confidence: 1.0,
+            originalText: match[0],
+            interpretation: 'Tomorrow'
+        };
+    }
+    handleYesterday(match, baseDate) {
+        const date = new Date(baseDate);
+        date.setDate(date.getDate() - 1);
+        return {
+            date,
+            confidence: 1.0,
+            originalText: match[0],
+            interpretation: 'Yesterday'
+        };
+    }
+    handleNextWeekday(match, baseDate) {
+        const weekday = (match[1] || '').toLowerCase();
+        const targetDay = this.WEEKDAYS.indexOf(weekday);
+        const currentDay = baseDate.getDay();
+        const date = new Date(baseDate);
+        let daysToAdd = targetDay - currentDay;
+        if (daysToAdd <= 0) {
+            daysToAdd += 7; // Next week
+        }
+        date.setDate(date.getDate() + daysToAdd);
+        return {
+            date,
+            confidence: 0.95,
+            originalText: match[0],
+            interpretation: `Next ${weekday}`
+        };
+    }
+    handleThisWeekday(match, baseDate) {
+        const weekday = (match[1] || '').toLowerCase();
+        const targetDay = this.WEEKDAYS.indexOf(weekday);
+        const currentDay = baseDate.getDay();
+        const date = new Date(baseDate);
+        const daysToAdd = targetDay - currentDay;
+        date.setDate(date.getDate() + daysToAdd);
+        return {
+            date,
+            confidence: 0.9,
+            originalText: match[0],
+            interpretation: `This ${weekday}`
+        };
+    }
+    handleLastWeekday(match, baseDate) {
+        const weekday = (match[1] || '').toLowerCase();
+        const targetDay = this.WEEKDAYS.indexOf(weekday);
+        const currentDay = baseDate.getDay();
+        const date = new Date(baseDate);
+        let daysToSubtract = currentDay - targetDay;
+        if (daysToSubtract <= 0) {
+            daysToSubtract += 7; // Last week
+        }
+        date.setDate(date.getDate() - daysToSubtract);
+        return {
+            date,
+            confidence: 0.9,
+            originalText: match[0],
+            interpretation: `Last ${weekday}`
+        };
+    }
+    handleWeekday(match, baseDate) {
+        // Default to next occurrence of this weekday
+        return this.handleNextWeekday(['next ' + match[0], match[0]], baseDate);
+    }
+    handleNextWeek(match, baseDate) {
+        const date = new Date(baseDate);
+        date.setDate(date.getDate() + 7);
+        return {
+            date,
+            confidence: 0.8,
+            originalText: match[0],
+            interpretation: 'Next week (same day)'
+        };
+    }
+    handleThisWeek(match, baseDate) {
+        // Return Friday of this week as default
+        const date = new Date(baseDate);
+        const currentDay = baseDate.getDay();
+        const daysToFriday = 5 - currentDay;
+        date.setDate(date.getDate() + daysToFriday);
+        return {
+            date,
+            confidence: 0.7,
+            originalText: match[0],
+            interpretation: 'This week (Friday)'
+        };
+    }
+    handleLastWeek(match, baseDate) {
+        const date = new Date(baseDate);
+        date.setDate(date.getDate() - 7);
+        return {
+            date,
+            confidence: 0.8,
+            originalText: match[0],
+            interpretation: 'Last week (same day)'
+        };
+    }
+    handleNextMonth(match, baseDate) {
+        const date = new Date(baseDate);
+        date.setMonth(date.getMonth() + 1);
+        return {
+            date,
+            confidence: 0.8,
+            originalText: match[0],
+            interpretation: 'Next month (same day)'
+        };
+    }
+    handleThisMonth(match, baseDate) {
+        // Return end of this month
+        const date = new Date(baseDate);
+        date.setMonth(date.getMonth() + 1, 0); // Last day of current month
+        return {
+            date,
+            confidence: 0.7,
+            originalText: match[0],
+            interpretation: 'End of this month'
+        };
+    }
+    handleLastMonth(match, baseDate) {
+        const date = new Date(baseDate);
+        date.setMonth(date.getMonth() - 1);
+        return {
+            date,
+            confidence: 0.8,
+            originalText: match[0],
+            interpretation: 'Last month (same day)'
+        };
+    }
+    handleInDays(match, baseDate) {
+        const days = parseInt(match[1] || '0');
+        const date = new Date(baseDate);
+        date.setDate(date.getDate() + days);
+        return {
+            date,
+            confidence: 0.95,
+            originalText: match[0],
+            interpretation: `In ${days} day${days > 1 ? 's' : ''}`
+        };
+    }
+    handleInWeeks(match, baseDate) {
+        const weeks = parseInt(match[1] || '0');
+        const date = new Date(baseDate);
+        date.setDate(date.getDate() + (weeks * 7));
+        return {
+            date,
+            confidence: 0.9,
+            originalText: match[0],
+            interpretation: `In ${weeks} week${weeks > 1 ? 's' : ''}`
+        };
+    }
+    handleInMonths(match, baseDate) {
+        const months = parseInt(match[1] || '0');
+        const date = new Date(baseDate);
+        date.setMonth(date.getMonth() + months);
+        return {
+            date,
+            confidence: 0.85,
+            originalText: match[0],
+            interpretation: `In ${months} month${months > 1 ? 's' : ''}`
+        };
+    }
+    handleByWeekday(match, baseDate) {
+        const weekday = (match[2] || '').toLowerCase();
+        const isNext = match[1] && match[1].toLowerCase().includes('next');
+        if (isNext) {
+            return this.handleNextWeekday(['', weekday], baseDate);
+        }
+        else {
+            return this.handleThisWeekday(['', weekday], baseDate);
+        }
+    }
+    handleByRelative(match, baseDate) {
+        const timeRef = (match[1] || '').toLowerCase();
+        if (timeRef === 'tomorrow') {
+            return this.handleTomorrow(['tomorrow'], baseDate);
+        }
+        else if (timeRef === 'next week') {
+            return this.handleNextWeek(['next week'], baseDate);
+        }
+        else if (timeRef === 'next month') {
+            return this.handleNextMonth(['next month'], baseDate);
+        }
+        // Default fallback - return tomorrow
+        return this.handleTomorrow(['tomorrow'], baseDate);
+    }
+    handleByEndOf(match, baseDate) {
+        const period = (match[2] || '').toLowerCase();
+        const isNext = match[1] && match[1].toLowerCase() === 'next';
+        const date = new Date(baseDate);
+        if (period === 'week') {
+            // End of week (Sunday)
+            const daysToSunday = 7 - date.getDay();
+            date.setDate(date.getDate() + daysToSunday);
+            if (isNext) {
+                date.setDate(date.getDate() + 7);
+            }
+        }
+        else if (period === 'month') {
+            // End of month
+            if (isNext) {
+                date.setMonth(date.getMonth() + 1);
+            }
+            date.setMonth(date.getMonth() + 1, 0); // Last day of month
+        }
+        return {
+            date,
+            confidence: 0.85,
+            originalText: match[0],
+            interpretation: `By end of ${isNext ? 'next' : 'this'} ${period}`
+        };
+    }
+    handleNumericDate(match, baseDate) {
+        const month = parseInt(match[1] || '1') - 1; // Month is 0-indexed
+        const day = parseInt(match[2] || '1');
+        let year = parseInt(match[3] || new Date().getFullYear().toString());
+        // Handle 2-digit years
+        if (year < 100) {
+            year += year < 50 ? 2000 : 1900;
+        }
+        const date = new Date(year, month, day);
+        return {
+            date,
+            confidence: 0.95,
+            originalText: match[0],
+            interpretation: `Specific date: ${match[0]}`
+        };
+    }
+    handleMonthDay(match, baseDate) {
+        const monthName = (match[1] || '').toLowerCase();
+        const day = parseInt(match[2] || '1');
+        const month = this.MONTHS.indexOf(monthName);
+        const date = new Date(baseDate.getFullYear(), month, day);
+        // If the date has passed this year, assume next year
+        if (date < baseDate) {
+            date.setFullYear(date.getFullYear() + 1);
+        }
+        return {
+            date,
+            confidence: 0.9,
+            originalText: match[0],
+            interpretation: `${monthName} ${day}`
+        };
+    }
+    handleTimeSpec(match, baseDate) {
+        const hour = parseInt(match[1] || '0');
+        const minute = parseInt(match[2] || '0');
+        const period = match[3]?.toLowerCase();
+        let adjustedHour = hour;
+        if (period === 'pm' && hour < 12) {
+            adjustedHour += 12;
+        }
+        else if (period === 'am' && hour === 12) {
+            adjustedHour = 0;
+        }
+        const date = new Date(baseDate);
+        date.setHours(adjustedHour, minute, 0, 0);
+        return {
+            date,
+            confidence: 0.9,
+            originalText: match[0],
+            interpretation: `Time: ${hour}:${minute.toString().padStart(2, '0')} ${period || ''}`
+        };
+    }
+    handleSimpleTime(match, baseDate) {
+        const hour = parseInt(match[1] || '0');
+        const period = match[2]?.toLowerCase();
+        let adjustedHour = hour;
+        if (period === 'pm' && hour < 12) {
+            adjustedHour += 12;
+        }
+        else if (period === 'am' && hour === 12) {
+            adjustedHour = 0;
+        }
+        const date = new Date(baseDate);
+        date.setHours(adjustedHour, 0, 0, 0);
+        return {
+            date,
+            confidence: 0.85,
+            originalText: match[0],
+            interpretation: `Time: ${hour} ${period || ''}`
+        };
+    }
+    parseNaturalLanguageDate(text, baseDate) {
+        // Simple fallback parsing for common phrases
+        const phrases = {
+            'end of week': () => {
+                const date = new Date(baseDate);
+                const daysToSunday = 7 - date.getDay();
+                date.setDate(date.getDate() + daysToSunday);
+                return date;
+            },
+            'start of week': () => {
+                const date = new Date(baseDate);
+                const daysToMonday = date.getDay() === 0 ? 1 : (8 - date.getDay());
+                date.setDate(date.getDate() + daysToMonday);
+                return date;
+            },
+            'end of day': () => {
+                const date = new Date(baseDate);
+                date.setHours(23, 59, 59, 999);
+                return date;
+            }
+        };
+        for (const [phrase, dateCalculator] of Object.entries(phrases)) {
+            if (text.includes(phrase)) {
+                return {
+                    date: dateCalculator(),
+                    confidence: 0.7,
+                    originalText: phrase,
+                    interpretation: phrase
+                };
+            }
+        }
+        return null;
+    }
+}
+exports.TemporalProcessor = TemporalProcessor;
+//# sourceMappingURL=TemporalProcessor.js.map

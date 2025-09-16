@@ -1,0 +1,1 @@
+{"version":3,"file":"index.js","sourceRoot":"","sources":["../../src/websocket/index.ts"],"names":[],"mappings":";AAAA;;;GAGG;;;;;;;;;;;;;;;;;AAGH,mCAAuD;AAEvD,iDAA+D;AAAtD,8GAAA,aAAa,OAAA;AAAE,8GAAA,aAAa,OAAA;AACrC,iCAAuD;AAA9C,uGAAA,cAAc,OAAA;AAAE,qGAAA,YAAY,OAAA;AACrC,0CAAwB;AAExB,8CAA8C;AAC9C,kBAAe;IACb,cAAc,EAAd,sBAAc;IACd,YAAY,EAAZ,oBAAY;CACb,CAAC"}
