@@ -122,11 +122,6 @@ const TaskStatsSchema = Type.Object({
  * Task service with caching
  */
 class TaskService {
-  @Cacheable({
-    ttl: 900, // 15 minutes
-    namespace: 'tasks',
-    keyGenerator: (taskId: string) => CacheKeyUtils.taskKey(taskId),
-  })
   async getTaskById(taskId: string) {
     return await taskRepository.findWithDetails(taskId);
   }
