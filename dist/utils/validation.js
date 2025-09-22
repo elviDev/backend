@@ -51,10 +51,12 @@ exports.TaskPrioritySchema = typebox_1.Type.Union([
 exports.TaskStatusSchema = typebox_1.Type.Union([
     typebox_1.Type.Literal('pending'),
     typebox_1.Type.Literal('in_progress'),
+    typebox_1.Type.Literal('in-progress'), // Frontend format (will be normalized to in_progress)
     typebox_1.Type.Literal('review'),
     typebox_1.Type.Literal('completed'),
     typebox_1.Type.Literal('cancelled'),
-    typebox_1.Type.Literal('on_hold')
+    typebox_1.Type.Literal('on_hold'),
+    typebox_1.Type.Literal('on-hold') // Frontend format (will be normalized to on_hold)
 ]);
 exports.BusinessValueSchema = typebox_1.Type.Union([
     typebox_1.Type.Literal('low'),

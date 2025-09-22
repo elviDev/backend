@@ -16,7 +16,7 @@ const poolConfig = {
     max: index_1.config.database.pool.max,
     // Connection lifecycle settings
     idleTimeoutMillis: 30000, // 30 seconds idle timeout
-    connectionTimeoutMillis: 10000, // 10 seconds connection timeout
+    connectionTimeoutMillis: 30000, // 30 seconds connection timeout (increased for AWS RDS)
     maxUses: 7500, // Maximum uses per connection before recycling
     // SSL configuration for production and AWS RDS
     ssl: index_1.config.app.isProduction || index_1.config.database.url.includes('rds.amazonaws.com')

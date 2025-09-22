@@ -146,7 +146,7 @@ const TaskStatsSchema = typebox_1.Type.Object({
  */
 class TaskService {
     async getTaskById(taskId) {
-        return await index_1.taskRepository.findById(taskId);
+        return await index_1.taskRepository.findWithDetails(taskId);
     }
     async updateTask(taskId, updateData) {
         return await index_1.taskRepository.update(taskId, updateData);
@@ -185,6 +185,19 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], TaskService.prototype, "createTask", null);
 const taskService = new TaskService();
+/**
+ * Normalize status values from frontend format to database format
+ */
+const normalizeStatus = (status) => {
+    if (!status)
+        return status;
+    // Convert frontend format (hyphen) to database format (underscore)
+    const statusMap = {
+        'in-progress': 'in_progress',
+        'on-hold': 'on_hold'
+    };
+    return statusMap[status] || status;
+};
 // Comment Schemas
 const CreateCommentSchema = typebox_1.Type.Object({
     content: typebox_1.Type.String({ minLength: 1, maxLength: 2000 }),
@@ -314,13 +327,13 @@ const registerTaskRoutes = async (fastify) => {
             let tasks = [];
             let total = 0;
             if (search) {
-                // Use search functionality
-                tasks = await index_1.taskRepository.searchTasks(search, request.user.userId, Math.min(limit, 100), offset);
+                // Use search functionality with assignee details
+                tasks = await index_1.taskRepository.searchTasksWithDetails(search, request.user.userId, Math.min(limit, 100), offset);
                 total = tasks.length; // Approximation for search results
             }
             else {
-                // Use filtered query
-                tasks = await index_1.taskRepository.findWithFilters(filters, Math.min(limit, 100), offset);
+                // Use filtered query with assignee details
+                tasks = await index_1.taskRepository.findWithFiltersAndDetails(filters, Math.min(limit, 100), offset);
                 // TODO: Get total count for pagination
                 total = tasks.length;
             }
@@ -619,6 +632,7 @@ const registerTaskRoutes = async (fastify) => {
             const { id } = request.params;
             const updateData = {
                 ...request.body,
+                status: normalizeStatus(request.body.status),
                 due_date: request.body.due_date ? new Date(request.body.due_date) : undefined,
                 start_date: request.body.start_date ? new Date(request.body.start_date) : undefined,
             };
@@ -1573,7 +1587,7 @@ const registerTaskRoutes = async (fastify) => {
                 limit,
                 offset,
                 includeReplies,
-            });
+            }, request.user?.userId);
             logger_1.loggers.api.info({
                 userId: request.user?.userId,
                 taskId,
@@ -1814,6 +1828,145 @@ const registerTaskRoutes = async (fastify) => {
                     },
                 });
             }
+        }
+    });
+    /**
+     * POST /tasks/:taskId/comments/:commentId/reactions - Add reaction to comment
+     */
+    fastify.post('/tasks/:taskId/comments/:commentId/reactions', {
+        preHandler: [middleware_1.authenticate, middleware_1.apiRateLimit],
+        schema: {
+            params: typebox_1.Type.Object({
+                taskId: validation_1.UUIDSchema,
+                commentId: validation_1.UUIDSchema,
+            }),
+            body: typebox_1.Type.Object({
+                reaction_type: typebox_1.Type.Union([
+                    typebox_1.Type.Literal('up'),
+                    typebox_1.Type.Literal('down'),
+                    typebox_1.Type.Literal('thumbs_up'),
+                    typebox_1.Type.Literal('thumbs_down')
+                ]),
+            }),
+            response: {
+                200: validation_1.SuccessResponseSchema,
+                400: typebox_1.Type.Object({ error: typebox_1.Type.Object({ message: typebox_1.Type.String(), code: typebox_1.Type.String() }) }),
+                404: typebox_1.Type.Object({ error: typebox_1.Type.Object({ message: typebox_1.Type.String(), code: typebox_1.Type.String() }) }),
+            },
+        },
+    }, async (request, reply) => {
+        try {
+            const { taskId, commentId } = request.params;
+            const { reaction_type } = request.body;
+            const userId = request.user.userId;
+            // Normalize reaction types from frontend format to backend format
+            const normalizedReactionType = reaction_type === 'thumbs_up' ? 'up' :
+                reaction_type === 'thumbs_down' ? 'down' :
+                    reaction_type;
+            // Verify comment exists and belongs to the task
+            const comment = await index_1.commentRepository.findByIdAndTask(commentId, taskId);
+            if (!comment) {
+                return reply.code(404).send({
+                    error: {
+                        message: 'Comment not found',
+                        code: 'COMMENT_NOT_FOUND',
+                    },
+                });
+            }
+            // Add or update reaction
+            await index_1.commentRepository.addOrUpdateReaction(commentId, userId, normalizedReactionType);
+            logger_1.logger.info({
+                userId,
+                taskId,
+                commentId,
+                reactionType: normalizedReactionType,
+            }, 'Comment reaction added');
+            reply.send({
+                success: true,
+                message: 'Reaction added successfully',
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                user: request.user ? {
+                    id: request.user.userId,
+                    email: request.user.email,
+                    role: request.user.role
+                } : undefined,
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers,
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to add comment reaction');
+            reply.code(500).send({
+                error: {
+                    message: 'Failed to add reaction',
+                    code: 'SERVER_ERROR',
+                },
+            });
+        }
+    });
+    /**
+     * DELETE /tasks/:taskId/comments/:commentId/reactions - Remove reaction from comment
+     */
+    fastify.delete('/tasks/:taskId/comments/:commentId/reactions', {
+        preHandler: [middleware_1.authenticate, middleware_1.apiRateLimit],
+        schema: {
+            params: typebox_1.Type.Object({
+                taskId: validation_1.UUIDSchema,
+                commentId: validation_1.UUIDSchema,
+            }),
+            response: {
+                200: validation_1.SuccessResponseSchema,
+                404: typebox_1.Type.Object({ error: typebox_1.Type.Object({ message: typebox_1.Type.String(), code: typebox_1.Type.String() }) }),
+            },
+        },
+    }, async (request, reply) => {
+        try {
+            const { taskId, commentId } = request.params;
+            const userId = request.user.userId;
+            // Verify comment exists and belongs to the task
+            const comment = await index_1.commentRepository.findByIdAndTask(commentId, taskId);
+            if (!comment) {
+                return reply.code(404).send({
+                    error: {
+                        message: 'Comment not found',
+                        code: 'COMMENT_NOT_FOUND',
+                    },
+                });
+            }
+            // Remove reaction
+            await index_1.commentRepository.removeReaction(commentId, userId);
+            logger_1.logger.info({
+                userId,
+                taskId,
+                commentId,
+            }, 'Comment reaction removed');
+            reply.send({
+                success: true,
+                message: 'Reaction removed successfully',
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                user: request.user ? {
+                    id: request.user.userId,
+                    email: request.user.email,
+                    role: request.user.role
+                } : undefined,
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers,
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to remove comment reaction');
+            reply.code(500).send({
+                error: {
+                    message: 'Failed to remove reaction',
+                    code: 'SERVER_ERROR',
+                },
+            });
         }
     });
 };

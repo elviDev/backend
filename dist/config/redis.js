@@ -30,31 +30,64 @@ class RedisManager {
     async initialize() {
         try {
             logger_1.logger.info('Initializing Redis connections...');
-            const redisOptions = {
-                host: index_1.config.redis?.host || 'localhost',
-                port: index_1.config.redis?.port || 6379,
-                db: index_1.config.redis?.db || 0,
-                retryDelayOnFailover: 100,
-                maxRetriesPerRequest: 3,
-                connectTimeout: 5000,
-                lazyConnect: true,
-                keepAlive: 30000,
-            };
-            if (typeof index_1.config.redis?.password === 'string') {
-                redisOptions.password = index_1.config.redis.password;
+            // Use Redis URL if available, otherwise use individual parameters
+            let redisOptions;
+            if (process.env.REDIS_URL && process.env.REDIS_URL !== 'redis://localhost:6379') {
+                // Use URL-based configuration (supports Redis Enterprise Cloud with TLS)
+                const redisUrl = process.env.REDIS_URL;
+                redisOptions = {
+                    retryDelayOnFailover: 100,
+                    maxRetriesPerRequest: 3,
+                    connectTimeout: 10000, // Increased timeout for cloud services
+                    lazyConnect: true,
+                    keepAlive: 30000,
+                    // Enable TLS if using rediss:// protocol
+                    ...(redisUrl.startsWith('rediss://') && {
+                        tls: {
+                            rejectUnauthorized: false, // Required for Redis Enterprise Cloud
+                        }
+                    })
+                };
+                // Create client with URL
+                this.client = new ioredis_1.default(redisUrl, redisOptions);
+                logger_1.logger.info(`Using Redis URL: ${redisUrl.replace(/:([^:@]*@)/, ':****@')}`);
             }
-            // Main client for general operations
-            this.client = new ioredis_1.default(redisOptions);
+            else {
+                // Use individual parameters (for local development)
+                redisOptions = {
+                    host: index_1.config.redis?.host || 'localhost',
+                    port: index_1.config.redis?.port || 6379,
+                    db: index_1.config.redis?.db || 0,
+                    retryDelayOnFailover: 100,
+                    maxRetriesPerRequest: 3,
+                    connectTimeout: 5000,
+                    lazyConnect: true,
+                    keepAlive: 30000,
+                };
+                if (typeof index_1.config.redis?.password === 'string') {
+                    redisOptions.password = index_1.config.redis.password;
+                }
+                // Main client for general operations
+                this.client = new ioredis_1.default(redisOptions);
+                logger_1.logger.info(`Using Redis host: ${redisOptions.host}:${redisOptions.port}`);
+            }
             // Subscriber for pub/sub operations
-            this.subscriber = new ioredis_1.default({
-                ...redisOptions,
-                db: index_1.config.redis?.pubSubDb || 1,
-            });
-            // Publisher for pub/sub operations
-            this.publisher = new ioredis_1.default({
-                ...redisOptions,
-                db: index_1.config.redis?.pubSubDb || 1,
-            });
+            if (process.env.REDIS_URL && process.env.REDIS_URL !== 'redis://localhost:6379') {
+                // For URL-based config, create new instances with the same URL
+                this.subscriber = new ioredis_1.default(process.env.REDIS_URL, redisOptions);
+                this.publisher = new ioredis_1.default(process.env.REDIS_URL, redisOptions);
+            }
+            else {
+                // For individual parameters, use db parameter
+                this.subscriber = new ioredis_1.default({
+                    ...redisOptions,
+                    db: index_1.config.redis?.pubSubDb || 1,
+                });
+                this.publisher = new ioredis_1.default({
+                    ...redisOptions,
+                    db: index_1.config.redis?.pubSubDb || 1,
+                });
+            }
             // Setup event handlers
             this.setupEventHandlers();
             // Connect all clients

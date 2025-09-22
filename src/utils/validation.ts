@@ -57,10 +57,12 @@ export const TaskPrioritySchema = Type.Union([
 export const TaskStatusSchema = Type.Union([
   Type.Literal('pending'),
   Type.Literal('in_progress'),
+  Type.Literal('in-progress'), // Frontend format (will be normalized to in_progress)
   Type.Literal('review'),
   Type.Literal('completed'),
   Type.Literal('cancelled'),
-  Type.Literal('on_hold')
+  Type.Literal('on_hold'),
+  Type.Literal('on-hold') // Frontend format (will be normalized to on_hold)
 ]);
 
 export const BusinessValueSchema = Type.Union([

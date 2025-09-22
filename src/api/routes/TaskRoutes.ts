@@ -128,7 +128,7 @@ class TaskService {
     keyGenerator: (taskId: string) => CacheKeyUtils.taskKey(taskId),
   })
   async getTaskById(taskId: string) {
-    return await taskRepository.findById(taskId);
+    return await taskRepository.findWithDetails(taskId);
   }
 
   @CacheEvict({
@@ -150,6 +150,19 @@ class TaskService {
 }
 
 const taskService = new TaskService();
+
+/**
+ * Normalize status values from frontend format to database format
+ */
+const normalizeStatus = (status?: string) => {
+  if (!status) return status;
+  // Convert frontend format (hyphen) to database format (underscore)
+  const statusMap: Record<string, string> = {
+    'in-progress': 'in_progress',
+    'on-hold': 'on_hold'
+  };
+  return statusMap[status] || status;
+};
 
 // Comment Schemas
 const CreateCommentSchema = Type.Object({
@@ -315,8 +328,8 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
         let total = 0;
 
         if (search) {
-          // Use search functionality
-          tasks = await taskRepository.searchTasks(
+          // Use search functionality with assignee details
+          tasks = await taskRepository.searchTasksWithDetails(
             search,
             request.user!.userId,
             Math.min(limit, 100),
@@ -324,8 +337,8 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
           );
           total = tasks.length; // Approximation for search results
         } else {
-          // Use filtered query
-          tasks = await taskRepository.findWithFilters(filters, Math.min(limit, 100), offset);
+          // Use filtered query with assignee details
+          tasks = await taskRepository.findWithFiltersAndDetails(filters, Math.min(limit, 100), offset);
           // TODO: Get total count for pagination
           total = tasks.length;
         }
@@ -683,6 +696,7 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
         const { id } = request.params;
         const updateData = {
           ...request.body,
+          status: normalizeStatus(request.body.status),
           due_date: request.body.due_date ? new Date(request.body.due_date) : undefined,
           start_date: request.body.start_date ? new Date(request.body.start_date) : undefined,
         };
@@ -1813,7 +1827,7 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
           limit,
           offset,
           includeReplies,
-        });
+        }, request.user?.userId);
 
         loggers.api.info(
           {
@@ -2104,6 +2118,175 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
             },
           });
         }
+      }
+    }
+  );
+
+  /**
+   * POST /tasks/:taskId/comments/:commentId/reactions - Add reaction to comment
+   */
+  fastify.post<{
+    Params: { taskId: string; commentId: string };
+    Body: { reaction_type: 'up' | 'down' | 'thumbs_up' | 'thumbs_down' };
+  }>(
+    '/tasks/:taskId/comments/:commentId/reactions',
+    {
+      preHandler: [authenticate, apiRateLimit],
+      schema: {
+        params: Type.Object({
+          taskId: UUIDSchema,
+          commentId: UUIDSchema,
+        }),
+        body: Type.Object({
+          reaction_type: Type.Union([
+            Type.Literal('up'), 
+            Type.Literal('down'),
+            Type.Literal('thumbs_up'),
+            Type.Literal('thumbs_down')
+          ]),
+        }),
+        response: {
+          200: SuccessResponseSchema,
+          400: Type.Object({ error: Type.Object({ message: Type.String(), code: Type.String() }) }),
+          404: Type.Object({ error: Type.Object({ message: Type.String(), code: Type.String() }) }),
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const { taskId, commentId } = request.params;
+        const { reaction_type } = request.body;
+        const userId = request.user!.userId;
+
+        // Normalize reaction types from frontend format to backend format
+        const normalizedReactionType = reaction_type === 'thumbs_up' ? 'up' :
+                                     reaction_type === 'thumbs_down' ? 'down' :
+                                     reaction_type;
+
+        // Verify comment exists and belongs to the task
+        const comment = await commentRepository.findByIdAndTask(commentId, taskId);
+        if (!comment) {
+          return reply.code(404).send({
+            error: {
+              message: 'Comment not found',
+              code: 'COMMENT_NOT_FOUND',
+            },
+          });
+        }
+
+        // Add or update reaction
+        await commentRepository.addOrUpdateReaction(commentId, userId, normalizedReactionType as 'up' | 'down');
+
+        logger.info(
+          {
+            userId,
+            taskId,
+            commentId,
+            reactionType: normalizedReactionType,
+          },
+          'Comment reaction added'
+        );
+
+        reply.send({
+          success: true,
+          message: 'Reaction added successfully',
+        });
+      } catch (error) {
+        const context = createErrorContext({
+          user: request.user ? {
+            id: request.user.userId,
+            email: request.user.email,
+            role: request.user.role
+          } : undefined,
+          ip: request.ip,
+          method: request.method,
+          url: request.url,
+          headers: request.headers as Record<string, string | string[] | undefined>,
+        });
+        loggers.api.error({ error, context }, 'Failed to add comment reaction');
+
+        reply.code(500).send({
+          error: {
+            message: 'Failed to add reaction',
+            code: 'SERVER_ERROR',
+          },
+        });
+      }
+    }
+  );
+
+  /**
+   * DELETE /tasks/:taskId/comments/:commentId/reactions - Remove reaction from comment
+   */
+  fastify.delete<{
+    Params: { taskId: string; commentId: string };
+  }>(
+    '/tasks/:taskId/comments/:commentId/reactions',
+    {
+      preHandler: [authenticate, apiRateLimit],
+      schema: {
+        params: Type.Object({
+          taskId: UUIDSchema,
+          commentId: UUIDSchema,
+        }),
+        response: {
+          200: SuccessResponseSchema,
+          404: Type.Object({ error: Type.Object({ message: Type.String(), code: Type.String() }) }),
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const { taskId, commentId } = request.params;
+        const userId = request.user!.userId;
+
+        // Verify comment exists and belongs to the task
+        const comment = await commentRepository.findByIdAndTask(commentId, taskId);
+        if (!comment) {
+          return reply.code(404).send({
+            error: {
+              message: 'Comment not found',
+              code: 'COMMENT_NOT_FOUND',
+            },
+          });
+        }
+
+        // Remove reaction
+        await commentRepository.removeReaction(commentId, userId);
+
+        logger.info(
+          {
+            userId,
+            taskId,
+            commentId,
+          },
+          'Comment reaction removed'
+        );
+
+        reply.send({
+          success: true,
+          message: 'Reaction removed successfully',
+        });
+      } catch (error) {
+        const context = createErrorContext({
+          user: request.user ? {
+            id: request.user.userId,
+            email: request.user.email,
+            role: request.user.role
+          } : undefined,
+          ip: request.ip,
+          method: request.method,
+          url: request.url,
+          headers: request.headers as Record<string, string | string[] | undefined>,
+        });
+        loggers.api.error({ error, context }, 'Failed to remove comment reaction');
+
+        reply.code(500).send({
+          error: {
+            message: 'Failed to remove reaction',
+            code: 'SERVER_ERROR',
+          },
+        });
       }
     }
   );

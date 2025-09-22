@@ -79,6 +79,8 @@ export interface TaskWithDetails extends Task {
     name: string;
     email: string;
     avatar_url?: string;
+    role: string;
+    phone?: string;
   }>;
   subtask_count?: number;
   dependency_count?: number;
@@ -442,7 +444,9 @@ class TaskRepository extends BaseRepository<Task> {
             'id', u.id,
             'name', u.name,
             'email', u.email,
-            'avatar_url', u.avatar_url
+            'avatar_url', u.avatar_url,
+            'role', u.role,
+            'phone', u.phone
           )
           FROM users u 
           WHERE u.id = ANY(t.assigned_to) 
@@ -533,6 +537,206 @@ class TaskRepository extends BaseRepository<Task> {
     `;
 
     const result = await this.executeRawQuery<Task>(sql, params, client);
+    return result.rows;
+  }
+
+  /**
+   * Find tasks with filters and include assignee details
+   */
+  async findWithFiltersAndDetails(filters: TaskFilter, limit: number = 50, offset: number = 0, client?: DatabaseClient): Promise<TaskWithDetails[]> {
+    const whereConditions = ['t.deleted_at IS NULL'];
+    const params: any[] = [];
+    let paramCounter = 1;
+
+    // Status filter
+    if (filters.status && filters.status.length > 0) {
+      whereConditions.push(`t.status = ANY($${paramCounter})`);
+      params.push(filters.status);
+      paramCounter++;
+    }
+
+    // Priority filter
+    if (filters.priority && filters.priority.length > 0) {
+      whereConditions.push(`t.priority = ANY($${paramCounter})`);
+      params.push(filters.priority);
+      paramCounter++;
+    }
+
+    // Assignee filter
+    if (filters.assignedTo && filters.assignedTo.length > 0) {
+      whereConditions.push(`t.assigned_to && $${paramCounter}`);
+      params.push(filters.assignedTo);
+      paramCounter++;
+    }
+
+    // Channel filter
+    if (filters.channelId) {
+      whereConditions.push(`t.channel_id = $${paramCounter}`);
+      params.push(filters.channelId);
+      paramCounter++;
+    }
+
+    // Due date filters
+    if (filters.dueAfter) {
+      whereConditions.push(`t.due_date >= $${paramCounter}`);
+      params.push(filters.dueAfter);
+      paramCounter++;
+    }
+
+    if (filters.dueBefore) {
+      whereConditions.push(`t.due_date <= $${paramCounter}`);
+      params.push(filters.dueBefore);
+      paramCounter++;
+    }
+
+    // Tags filter
+    if (filters.tags && filters.tags.length > 0) {
+      whereConditions.push(`t.tags && $${paramCounter}`);
+      params.push(filters.tags);
+      paramCounter++;
+    }
+
+    // Voice created filter
+    if (filters.voiceCreated !== undefined) {
+      whereConditions.push(`t.voice_created = $${paramCounter}`);
+      params.push(filters.voiceCreated);
+      paramCounter++;
+    }
+
+    // Overdue filter
+    if (filters.overdue) {
+      whereConditions.push(`t.due_date < NOW() AND t.status NOT IN ('completed', 'cancelled')`);
+    }
+
+    const sql = `
+      SELECT 
+        t.*,
+        c.name as channel_name,
+        owner.name as owner_name,
+        ARRAY(
+          SELECT json_build_object(
+            'id', u.id,
+            'name', u.name,
+            'email', u.email,
+            'avatar_url', u.avatar_url,
+            'role', u.role,
+            'phone', u.phone
+          )
+          FROM users u 
+          WHERE u.id = ANY(t.assigned_to) 
+          AND u.deleted_at IS NULL
+          ORDER BY u.name
+        ) as assignee_details,
+        (
+          SELECT COUNT(*)
+          FROM tasks subtasks
+          WHERE subtasks.parent_task_id = t.id 
+          AND subtasks.deleted_at IS NULL
+        ) as subtask_count,
+        (
+          SELECT COUNT(*)
+          FROM task_dependencies td
+          WHERE td.task_id = t.id 
+          AND td.deleted_at IS NULL
+          AND td.is_active = true
+        ) as dependency_count
+      FROM tasks t
+      LEFT JOIN channels c ON t.channel_id = c.id
+      LEFT JOIN users owner ON t.owned_by = owner.id
+      WHERE ${whereConditions.join(' AND ')}
+      ORDER BY 
+        CASE t.priority 
+          WHEN 'critical' THEN 5 
+          WHEN 'urgent' THEN 4 
+          WHEN 'high' THEN 3 
+          WHEN 'medium' THEN 2 
+          ELSE 1 
+        END DESC,
+        t.due_date ASC NULLS LAST,
+        t.created_at DESC
+      LIMIT $${paramCounter} OFFSET $${paramCounter + 1}
+    `;
+
+    params.push(limit, offset);
+    const result = await this.executeRawQuery<TaskWithDetails>(sql, params, client);
+    return result.rows;
+  }
+
+  /**
+   * Search tasks with assignee details
+   */
+  async searchTasksWithDetails(
+    searchTerm: string, 
+    userId?: string, 
+    limit: number = 20, 
+    offset: number = 0, 
+    client?: DatabaseClient
+  ): Promise<TaskWithDetails[]> {
+    let userCondition = '';
+    let params = [`%${searchTerm}%`, limit, offset];
+
+    if (userId) {
+      userCondition = 'AND ($4 = ANY(t.assigned_to) OR $4 = ANY(t.watchers) OR t.created_by = $4)';
+      params.push(userId);
+    }
+
+    const sql = `
+      SELECT 
+        t.*,
+        c.name as channel_name,
+        owner.name as owner_name,
+        ARRAY(
+          SELECT json_build_object(
+            'id', u.id,
+            'name', u.name,
+            'email', u.email,
+            'avatar_url', u.avatar_url,
+            'role', u.role,
+            'phone', u.phone
+          )
+          FROM users u 
+          WHERE u.id = ANY(t.assigned_to) 
+          AND u.deleted_at IS NULL
+          ORDER BY u.name
+        ) as assignee_details,
+        (
+          SELECT COUNT(*)
+          FROM tasks subtasks
+          WHERE subtasks.parent_task_id = t.id 
+          AND subtasks.deleted_at IS NULL
+        ) as subtask_count,
+        (
+          SELECT COUNT(*)
+          FROM task_dependencies td
+          WHERE td.task_id = t.id 
+          AND td.deleted_at IS NULL
+          AND td.is_active = true
+        ) as dependency_count
+      FROM tasks t
+      LEFT JOIN channels c ON t.channel_id = c.id
+      LEFT JOIN users owner ON t.owned_by = owner.id
+      WHERE (
+        LOWER(t.title) LIKE LOWER($1) OR 
+        LOWER(t.description) LIKE LOWER($1) OR
+        LOWER(array_to_string(t.tags, ' ')) LIKE LOWER($1)
+      )
+      AND t.deleted_at IS NULL
+      AND t.status != 'cancelled'
+      ${userCondition}
+      ORDER BY 
+        CASE WHEN LOWER(t.title) LIKE LOWER($1) THEN 1 ELSE 2 END,
+        CASE t.priority 
+          WHEN 'critical' THEN 5 
+          WHEN 'urgent' THEN 4 
+          WHEN 'high' THEN 3 
+          WHEN 'medium' THEN 2 
+          ELSE 1 
+        END DESC,
+        t.created_at DESC
+      LIMIT $2 OFFSET $3
+    `;
+
+    const result = await this.executeRawQuery<TaskWithDetails>(sql, params, client);
     return result.rows;
   }
 

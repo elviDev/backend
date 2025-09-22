@@ -74,6 +74,8 @@ export interface TaskWithDetails extends Task {
         name: string;
         email: string;
         avatar_url?: string;
+        role: string;
+        phone?: string;
     }>;
     subtask_count?: number;
     dependency_count?: number;
@@ -145,6 +147,14 @@ declare class TaskRepository extends BaseRepository<Task> {
      * Search tasks by title or description
      */
     searchTasks(searchTerm: string, userId?: string, limit?: number, offset?: number, client?: DatabaseClient): Promise<Task[]>;
+    /**
+     * Find tasks with filters and include assignee details
+     */
+    findWithFiltersAndDetails(filters: TaskFilter, limit?: number, offset?: number, client?: DatabaseClient): Promise<TaskWithDetails[]>;
+    /**
+     * Search tasks with assignee details
+     */
+    searchTasksWithDetails(searchTerm: string, userId?: string, limit?: number, offset?: number, client?: DatabaseClient): Promise<TaskWithDetails[]>;
     /**
      * Get task statistics
      */

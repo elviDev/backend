@@ -41,6 +41,7 @@ const fastify_1 = __importDefault(require("fastify"));
 const index_1 = require("./config/index");
 const database_1 = require("./config/database");
 const redis_1 = require("./config/redis");
+const RedisMemoryManager_1 = require("./services/RedisMemoryManager");
 const SocketManager_1 = require("./websocket/SocketManager");
 const logger_1 = require("./utils/logger");
 const errors_1 = require("./utils/errors");
@@ -408,6 +409,38 @@ class APIServer {
                 },
             });
         });
+        // Redis memory monitoring endpoint
+        this.app.get('/health/redis-memory', async (request, reply) => {
+            try {
+                const memoryStats = await RedisMemoryManager_1.redisMemoryManager.getDetailedStats();
+                const memoryUsage = await RedisMemoryManager_1.redisMemoryManager.getMemoryUsage();
+                reply.send({
+                    status: 'ok',
+                    timestamp: new Date().toISOString(),
+                    redis: {
+                        memory: {
+                            used: `${(memoryUsage.used / 1024 / 1024).toFixed(2)}MB`,
+                            usagePercent: `${memoryUsage.usagePercent.toFixed(1)}%`,
+                            limit: `${(memoryUsage.maxMemory / 1024 / 1024).toFixed(0)}MB`,
+                            available: `${((memoryUsage.maxMemory - memoryUsage.used) / 1024 / 1024).toFixed(2)}MB`
+                        },
+                        keys: {
+                            total: memoryUsage.keyCount,
+                            byNamespace: memoryStats.keysByNamespace
+                        },
+                        status: memoryUsage.usagePercent > 90 ? 'critical' :
+                            memoryUsage.usagePercent > 80 ? 'warning' : 'healthy'
+                    }
+                });
+            }
+            catch (error) {
+                logger_1.logger.error({ error }, 'Redis memory check failed');
+                reply.code(500).send({
+                    status: 'error',
+                    message: 'Failed to check Redis memory usage'
+                });
+            }
+        });
     }
     /**
      * Register application routes
@@ -522,6 +555,8 @@ class APIServer {
             const redisTimer = logger_1.startupLogger.createTimer('Redis');
             try {
                 await redis_1.redisManager.initialize();
+                // Start Redis memory monitoring for 25MB limit
+                RedisMemoryManager_1.redisMemoryManager.startMonitoring();
                 services.push({ name: 'Redis', status: true, duration: redisTimer.end() });
             }
             catch (error) {
@@ -624,6 +659,7 @@ class APIServer {
                 await SocketManager_1.socketManager.close();
                 // Close Redis connections
                 logger_1.logger.info('Closing Redis connections...');
+                RedisMemoryManager_1.redisMemoryManager.stopMonitoring();
                 await redis_1.redisManager.close();
                 // Close HTTP server
                 if (this.httpServer) {
