@@ -1318,7 +1318,7 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
           assignedTo: assigned_to ? [assigned_to] : undefined,
         };
 
-        const tasks = await taskRepository.findWithFilters(filters, Math.min(limit, 100), offset);
+        const tasks = await taskRepository.findWithFiltersAndDetails(filters, Math.min(limit, 100), offset);
         const total = tasks.length; // Simplified - in production, implement proper count query
 
         loggers.api.info(

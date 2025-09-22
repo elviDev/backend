@@ -85,6 +85,27 @@ const ChannelResponseSchema = Type.Object({
   last_activity: Type.Optional(Type.String({ format: 'date-time' })),
   created_at: Type.String({ format: 'date-time' }),
   updated_at: Type.String({ format: 'date-time' }),
+  member_details: Type.Optional(Type.Array(Type.Object({
+    id: UUIDSchema,
+    name: Type.String(),
+    email: Type.String(),
+    role: Type.String(),
+    avatar_url: Type.Optional(Type.String()),
+  }))),
+  tasks: Type.Optional(Type.Array(Type.Object({
+    id: UUIDSchema,
+    title: Type.String(),
+    status: Type.String(),
+    priority: Type.String(),
+    assignee_details: Type.Optional(Type.Array(Type.Object({
+      id: UUIDSchema,
+      name: Type.String(),
+      email: Type.String(),
+      avatar_url: Type.Optional(Type.String()),
+      role: Type.String(),
+      phone: Type.Optional(Type.String()),
+    }))),
+  }))),
 });
 
 /**
@@ -97,7 +118,11 @@ class ChannelService {
     keyGenerator: (channelId: string) => CacheKeyUtils.channelKey(channelId),
   })
   async getChannelById(channelId: string) {
-    return await channelRepository.findById(channelId);
+    return await channelRepository.findWithFullDetails(channelId);
+  }
+
+  async getAllChannelsForUser(userId: string, userRole: string) {
+    return await channelRepository.findAccessibleByUserWithDetails(userId, userRole);
   }
 
   @CacheEvict({
@@ -194,8 +219,8 @@ export const registerChannelRoutes = async (fastify: FastifyInstance) => {
         if (parent_id) filters.parent_id = parent_id;
         if (search) filters.search = search;
 
-        // Get channels user has access to based on their role
-        const result = await channelRepository.findUserChannels(request.user!.userId, request.user!.role);
+        // Get channels user has access to based on their role with full details
+        const result = await channelService.getAllChannelsForUser(request.user!.userId, request.user!.role);
 
         loggers.api.info(
           {
