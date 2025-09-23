@@ -32,6 +32,12 @@ export type { Announcement, CreateAnnouncementData, UpdateAnnouncementData, Anno
 export { CommentRepository } from './CommentRepository';
 export type { TaskComment, CreateCommentData, UpdateCommentData, CommentFilterOptions } from './CommentRepository';
 
+export { default as ThreadRepository } from './ThreadRepository';
+export type { ThreadStatistics, ThreadWithDetails, ThreadReply } from './ThreadRepository';
+
+export { default as ReactionRepository } from './ReactionRepository';
+export type { MessageReaction, ReactionSummary, MessageReactionDetails } from './ReactionRepository';
+
 // Repository instances for dependency injection
 import UserRepository from './UserRepository';
 import ChannelRepository from './ChannelRepository';
@@ -41,6 +47,8 @@ import ActivityRepository from './ActivityRepository';
 import FileRepository from './FileRepository';
 import AnnouncementRepository from './AnnouncementRepository';
 import { CommentRepository } from './CommentRepository';
+import ThreadRepository from './ThreadRepository';
+import ReactionRepository from './ReactionRepository';
 
 // Create singleton instances
 export const userRepository = new UserRepository();
@@ -51,6 +59,8 @@ export const activityRepository = new ActivityRepository();
 export const fileRepository = new FileRepository();
 export const announcementRepository = new AnnouncementRepository();
 export const commentRepository = new CommentRepository();
+export const threadRepository = new ThreadRepository();
+export const reactionRepository = new ReactionRepository();
 
 // Repository collection for easy access
 export const repositories = {
@@ -62,6 +72,8 @@ export const repositories = {
   files: fileRepository,
   announcements: announcementRepository,
   comments: commentRepository,
+  threads: threadRepository,
+  reactions: reactionRepository,
 } as const;
 
 export type Repositories = typeof repositories;

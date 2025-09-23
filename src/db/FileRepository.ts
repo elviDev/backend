@@ -140,7 +140,7 @@ class FileRepository extends BaseRepository<FileEntity> {
     offset: number = 0,
     client?: DatabaseClient
   ): Promise<FileWithUploader[]> {
-    let whereConditions = ['fel.entity_type = \'channel\'', 'fel.entity_id = $1', 'f.deleted_at IS NULL'];
+    let whereConditions = ['fel.entity_type = \'channel\'', 'fel.entity_id = $1', 'f.status != \'deleted\''];
     let params: any[] = [channelId];
     let paramIndex = 2;
 
@@ -216,7 +216,7 @@ class FileRepository extends BaseRepository<FileEntity> {
     },
     client?: DatabaseClient
   ): Promise<number> {
-    let whereConditions = ['fel.entity_type = \'channel\'', 'fel.entity_id = $1', 'f.deleted_at IS NULL'];
+    let whereConditions = ['fel.entity_type = \'channel\'', 'fel.entity_id = $1', 'f.status != \'deleted\''];
     let params: any[] = [channelId];
     let paramIndex = 2;
 
@@ -284,7 +284,7 @@ class FileRepository extends BaseRepository<FileEntity> {
       FROM ${this.tableName} f
       LEFT JOIN users u ON f.uploaded_by = u.id
       LEFT JOIN tasks t ON f.task_id = t.id
-      WHERE f.task_id = $1 AND f.deleted_at IS NULL
+      WHERE f.task_id = $1 AND f.status != 'deleted'
       ORDER BY f.created_at DESC
       LIMIT $2 OFFSET $3
     `;
@@ -311,7 +311,7 @@ class FileRepository extends BaseRepository<FileEntity> {
     offset: number = 0,
     client?: DatabaseClient
   ): Promise<FileWithUploader[]> {
-    let whereConditions = ['f.uploaded_by = $1', 'f.deleted_at IS NULL'];
+    let whereConditions = ['f.uploaded_by = $1', 'f.status != \'deleted\''];
     let params: any[] = [userId];
     let paramIndex = 2;
 
@@ -373,7 +373,7 @@ class FileRepository extends BaseRepository<FileEntity> {
     client?: DatabaseClient
   ): Promise<FileWithUploader[]> {
     let whereConditions = [
-      'f.deleted_at IS NULL',
+      'f.status != \'deleted\'',
       '(LOWER(f.filename) LIKE LOWER($1) OR LOWER(f.original_name) LIKE LOWER($1))',
     ];
     let params: any[] = [`%${searchTerm}%`];
@@ -436,7 +436,7 @@ class FileRepository extends BaseRepository<FileEntity> {
       SET 
         access_count = access_count + 1,
         last_accessed_at = NOW()
-      WHERE id = $1 AND deleted_at IS NULL
+      WHERE id = $1 AND status != 'deleted'
     `;
 
     try {
@@ -460,7 +460,7 @@ class FileRepository extends BaseRepository<FileEntity> {
     const sql = `
       UPDATE ${this.tableName}
       SET download_count = download_count + 1
-      WHERE id = $1 AND deleted_at IS NULL
+      WHERE id = $1 AND status != 'deleted'
     `;
 
     try {
@@ -491,7 +491,7 @@ class FileRepository extends BaseRepository<FileEntity> {
       SET 
         virus_scan_status = $2,
         virus_scan_result = $3
-      WHERE id = $1 AND deleted_at IS NULL
+      WHERE id = $1 AND status != 'deleted'
       RETURNING id
     `;
 
@@ -549,13 +549,13 @@ class FileRepository extends BaseRepository<FileEntity> {
         COUNT(*) FILTER (WHERE virus_scan_status = 'clean') as clean_files,
         COUNT(*) FILTER (WHERE virus_scan_status = 'infected') as infected_files
       FROM ${this.tableName}
-      WHERE deleted_at IS NULL
+      WHERE status != 'deleted'
     `;
 
     const topFilesSql = `
       SELECT id, filename, download_count
       FROM ${this.tableName}
-      WHERE deleted_at IS NULL
+      WHERE status != 'deleted'
       AND download_count > 0
       ORDER BY download_count DESC
       LIMIT 10
@@ -597,10 +597,10 @@ class FileRepository extends BaseRepository<FileEntity> {
   async cleanupExpiredFiles(client?: DatabaseClient): Promise<number> {
     const sql = `
       UPDATE ${this.tableName}
-      SET deleted_at = NOW()
+      SET status = 'deleted'
       WHERE expires_at IS NOT NULL 
         AND expires_at < NOW()
-        AND deleted_at IS NULL
+        AND status != 'deleted'
     `;
 
     try {

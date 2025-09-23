@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { Type } from '@sinclair/typebox';
-import { messageRepository, channelRepository } from '@db/index';
+import { messageRepository, channelRepository, threadRepository, reactionRepository } from '@db/index';
 import { logger, loggers } from '@utils/logger';
 import {
   ValidationError,
@@ -35,8 +35,8 @@ const SendMessageSchema = Type.Object({
       Type.Literal('system'),
     ])
   ),
-  reply_to: Type.Optional(UUIDSchema),
-  thread_root: Type.Optional(UUIDSchema),
+  reply_to_id: Type.Optional(UUIDSchema),
+  thread_root_id: Type.Optional(UUIDSchema),
   mentions: Type.Optional(Type.Array(UUIDSchema)),
   attachments: Type.Optional(Type.Array(Type.Object({
     file_id: UUIDSchema,
@@ -61,19 +61,43 @@ const MessageResponseSchema = Type.Object({
   channel_id: UUIDSchema,
   task_id: Type.Optional(UUIDSchema),
   user_id: UUIDSchema,
-  user_name: Type.String(),
-  user_avatar: Type.Optional(Type.String()),
+  user_details: Type.Object({
+    id: UUIDSchema,
+    name: Type.String(),
+    email: Type.String(),
+    avatar_url: Type.Optional(Type.String()),
+    role: Type.String(),
+    phone: Type.Optional(Type.String()),
+  }),
   content: Type.String(),
   message_type: Type.String(),
   voice_data: Type.Optional(Type.Any()),
   transcription: Type.Optional(Type.String()),
   attachments: Type.Array(Type.Any()),
-  reply_to: Type.Optional(UUIDSchema),
-  thread_root: Type.Optional(UUIDSchema),
+  reply_to_id: Type.Optional(UUIDSchema),
+  thread_root_id: Type.Optional(UUIDSchema),
   is_edited: Type.Boolean(),
   is_pinned: Type.Boolean(),
   is_announcement: Type.Boolean(),
-  reactions: Type.Record(Type.String(), Type.Any()),
+  reactions: Type.Array(Type.Object({
+    emoji: Type.String(),
+    count: Type.Integer(),
+    users: Type.Array(Type.Object({
+      id: UUIDSchema,
+      name: Type.String(),
+      avatar_url: Type.Optional(Type.String()),
+    })),
+  })),
+  thread_info: Type.Optional(Type.Object({
+    reply_count: Type.Integer(),
+    participant_count: Type.Integer(),
+    last_reply_at: Type.Optional(Type.String({ format: 'date-time' })),
+    last_reply_by_details: Type.Optional(Type.Object({
+      id: UUIDSchema,
+      name: Type.String(),
+      avatar_url: Type.Optional(Type.String()),
+    })),
+  })),
   mentions: Type.Array(UUIDSchema),
   ai_generated: Type.Boolean(),
   ai_context: Type.Optional(Type.Any()),
@@ -148,7 +172,7 @@ export const registerMessageRoutes = async (fastify: FastifyInstance) => {
         querystring: Type.Intersect([
           PaginationSchema,
           Type.Object({
-            thread_root: Type.Optional(UUIDSchema),
+            thread_root_id: Type.Optional(UUIDSchema),
             search: Type.Optional(Type.String({ maxLength: 200 })),
             message_type: Type.Optional(Type.String()),
             before: Type.Optional(Type.String({ format: 'date-time' })),
@@ -186,7 +210,7 @@ export const registerMessageRoutes = async (fastify: FastifyInstance) => {
         // Build filters
         const filters: any = {
           channelId,
-          threadRoot: thread_root,
+          threadRootId: thread_root,
           messageType: message_type,
           before: before ? new Date(before) : undefined,
           after: after ? new Date(after) : undefined,
@@ -309,7 +333,7 @@ export const registerMessageRoutes = async (fastify: FastifyInstance) => {
         await channelRepository.updateActivity(channelId);
 
         // Determine if this is a thread message
-        const isThreadReply = message.reply_to && message.thread_root;
+        const isThreadReply = message.reply_to_id && message.thread_root_id;
         
         // Broadcast message to channel members with thread context
         await WebSocketUtils.sendToChannel(channelId, 'message_sent', {
@@ -317,8 +341,8 @@ export const registerMessageRoutes = async (fastify: FastifyInstance) => {
           channelId,
           messageId: message.id,
           isThreadReply,
-          threadRoot: message.thread_root,
-          replyTo: message.reply_to,
+          threadRootId: message.thread_root_id,
+          replyToId: message.reply_to_id,
           message: {
             id: message.id,
             channel_id: message.channel_id,
@@ -332,8 +356,8 @@ export const registerMessageRoutes = async (fastify: FastifyInstance) => {
             voice_data: message.voice_data,
             transcription: message.transcription,
             attachments: message.attachments,
-            reply_to: message.reply_to,
-            thread_root: message.thread_root,
+            reply_to_id: message.reply_to_id,
+            thread_root_id: message.thread_root_id,
             is_edited: message.is_edited,
             is_pinned: message.is_pinned,
             is_announcement: message.is_announcement,
@@ -359,8 +383,8 @@ export const registerMessageRoutes = async (fastify: FastifyInstance) => {
           await WebSocketUtils.sendToChannel(channelId, 'thread_reply_sent', {
             type: 'thread_reply_sent',
             channelId,
-            threadRoot: message.thread_root,
-            parentMessageId: message.reply_to,
+            threadRootId: message.thread_root_id,
+            parentMessageId: message.reply_to_id,
             messageId: message.id,
             message: {
               id: message.id,
@@ -375,8 +399,8 @@ export const registerMessageRoutes = async (fastify: FastifyInstance) => {
               voice_data: message.voice_data,
               transcription: message.transcription,
               attachments: message.attachments,
-              reply_to: message.reply_to,
-              thread_root: message.thread_root,
+              reply_to_id: message.reply_to_id,
+              thread_root_id: message.thread_root_id,
               is_edited: message.is_edited,
               is_pinned: message.is_pinned,
               is_announcement: message.is_announcement,
@@ -677,77 +701,6 @@ export const registerMessageRoutes = async (fastify: FastifyInstance) => {
     }
   );
 
-  /**
-   * POST /channels/:channelId/messages/:messageId/reactions - Add reaction
-   */
-  fastify.post<{
-    Params: { channelId: string; messageId: string };
-    Body: { emoji: string };
-  }>(
-    '/channels/:channelId/messages/:messageId/reactions',
-    {
-      preHandler: [authenticate, requireChannelAccess],
-      schema: {
-        params: Type.Object({
-          channelId: UUIDSchema,
-          messageId: UUIDSchema,
-        }),
-        body: Type.Object({
-          emoji: Type.String({ minLength: 1, maxLength: 10 }),
-        }),
-        response: {
-          200: SuccessResponseSchema,
-        },
-      },
-    },
-    async (request, reply) => {
-      try {
-        const { channelId, messageId } = request.params;
-        const { emoji } = request.body;
-
-        const success = await messageRepository.addReaction(
-          messageId,
-          request.user!.userId,
-          emoji
-        );
-
-        if (!success) {
-          throw new NotFoundError('Message not found');
-        }
-
-        // Broadcast reaction
-        await WebSocketUtils.sendToChannel(channelId, 'message_reaction_added', {
-          type: 'message_reaction_added',
-          channelId,
-          messageId,
-          emoji,
-          userId: request.user!.userId,
-          userName: request.user!.name,
-          userRole: request.user!.role,
-          timestamp: new Date().toISOString(),
-        });
-
-        reply.send({
-          success: true,
-          message: 'Reaction added successfully',
-          timestamp: new Date().toISOString(),
-        });
-      } catch (error) {
-        loggers.api.error({ error }, 'Failed to add reaction');
-
-        if (error instanceof NotFoundError) {
-          reply.code(404).send(formatErrorResponse(error));
-        } else {
-          reply.code(500).send({
-            error: {
-              message: 'Failed to add reaction',
-              code: 'SERVER_ERROR',
-            },
-          });
-        }
-      }
-    }
-  );
 
   /**
    * GET /channels/:channelId/messages/:messageId/thread - Get thread messages
@@ -788,34 +741,28 @@ export const registerMessageRoutes = async (fastify: FastifyInstance) => {
         const { channelId, messageId } = request.params;
         const { limit = 50, offset = 0 } = request.query;
 
-        // Get the parent message
-        const parentMessage = await messageRepository.findById(messageId);
+        // Get the parent message with user details
+        const parentMessage = await messageRepository.findByIdWithUser(messageId);
         if (!parentMessage) {
           throw new NotFoundError('Message not found');
         }
 
         // Get thread root - if this message is itself a reply, get its root
-        const threadRoot = parentMessage.thread_root || messageId;
+        const threadRootId = parentMessage.thread_root_id || messageId;
 
-        // Get all replies to this thread
-        const replies = await messageRepository.findChannelMessages(
-          channelId,
-          { threadRoot },
+        // Use ThreadRepository for better thread management
+        const { replies: threadReplies, total } = await threadRepository.getThreadReplies(
+          threadRootId,
           Math.min(limit, 100),
           offset
         );
-
-        // Filter out the parent message from replies if it's included
-        const threadReplies = replies.filter(msg => msg.id !== threadRoot);
-
-        const total = await messageRepository.getChannelMessageCount(channelId, { threadRoot });
 
         loggers.api.info(
           {
             userId: request.user?.userId,
             channelId,
             messageId,
-            threadRoot,
+            threadRootId,
             repliesCount: threadReplies.length,
           },
           'Thread messages retrieved'
@@ -827,10 +774,10 @@ export const registerMessageRoutes = async (fastify: FastifyInstance) => {
             parentMessage,
             replies: threadReplies,
             pagination: {
-              total: total - 1, // Exclude parent message from count
+              total,
               limit,
               offset,
-              hasMore: offset + limit < total - 1,
+              hasMore: offset + limit < total,
             },
           },
           timestamp: new Date().toISOString(),
