@@ -400,6 +400,147 @@ export const requireChannelAccess = async (
 };
 
 /**
+ * Require channel membership for sending messages
+ * More restrictive than requireChannelAccess - only members can send messages
+ */
+export const requireChannelMembership = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  if (!request.user || !request.user.isAuthenticated) {
+    throw new AuthenticationError('Authentication required');
+  }
+
+  // Check for channel ID in different parameter names used in routes
+  const channelId = (request.params as any).channelId ||
+                   (request.params as any).id ||
+                   (request.body as any)?.channelId;
+
+  if (!channelId) {
+    throw new AuthorizationError('Channel ID not specified');
+  }
+
+  try {
+    const { channelRepository } = await import('@db/index');
+    const channel = await channelRepository.findById(channelId);
+
+    if (!channel) {
+      throw new AuthorizationError('Channel not found');
+    }
+
+    // CEO can send messages to any channel (as they are usually added to all channels)
+    if (request.user.role === 'ceo') {
+      return;
+    }
+
+    // Creator can always send messages
+    if (channel.created_by === request.user.userId) {
+      return;
+    }
+
+    // Check if user is explicitly a member
+    if (!channel.members || !channel.members.includes(request.user.userId)) {
+      securityLogger.logAuthzEvent('access_denied', {
+        userId: request.user.userId,
+        channelId,
+        resource: request.url,
+        action: request.method,
+        ip: request.ip,
+        reason: 'not_channel_member',
+      });
+
+      throw new AuthorizationError('Only channel members can send messages to this channel');
+    }
+
+    securityLogger.logAuthzEvent('access_granted', {
+      userId: request.user.userId,
+      channelId,
+      resource: request.url,
+      action: request.method,
+      ip: request.ip,
+      reason: 'channel_member',
+    });
+
+  } catch (error) {
+    if (error instanceof AuthorizationError) {
+      throw error;
+    }
+
+    logger.error(
+      { error, channelId, userId: request.user.userId },
+      'Error checking channel membership'
+    );
+
+    throw new AuthorizationError('Channel membership verification failed');
+  }
+};
+
+/**
+ * Task comment authorization middleware - ensures only task assignees and owner can comment
+ */
+export const requireTaskCommentAccess = async (
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> => {
+  if (!request.user || !request.user.isAuthenticated) {
+    throw new AuthenticationError('Authentication required for this resource');
+  }
+
+  // CEO can comment on any task
+  if (request.user.role === 'ceo') {
+    return;
+  }
+
+  // Get task ID from parameters
+  const taskId = (request.params as any).taskId;
+  if (!taskId) {
+    throw new AuthorizationError('Task ID not specified');
+  }
+
+  try {
+    const { taskRepository } = await import('@db/index');
+    const task = await taskRepository.findById(taskId);
+
+    if (!task) {
+      throw new AuthorizationError('Task not found');
+    }
+
+    // Check if user is the task owner
+    if (task.created_by === request.user.userId) {
+      return;
+    }
+
+    // Check if user is assigned to the task
+    if (task.assigned_to && task.assigned_to.includes(request.user.userId)) {
+      return;
+    }
+
+    // If user is neither owner nor assignee, deny access
+    securityLogger.logAuthzEvent('access_denied', {
+      userId: request.user.userId,
+      taskId,
+      resource: request.url,
+      action: request.method,
+      ip: request.ip,
+      reason: 'not_task_owner_or_assignee',
+    });
+
+    throw new AuthorizationError('Only task owner and assignees can comment on this task');
+
+  } catch (error) {
+    if (error instanceof AuthorizationError) {
+      throw error;
+    }
+
+    logger.error(
+      { error, taskId, userId: request.user.userId },
+      'Error checking task comment access'
+    );
+    throw new AuthorizationError('Unable to verify task comment access');
+  }
+};
+
+/**
  * Audit logging middleware - logs all requests for security audit
  */
 export const auditLog = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {

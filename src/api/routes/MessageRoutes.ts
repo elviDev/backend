@@ -9,7 +9,7 @@ import {
   formatErrorResponse,
   createErrorContext,
 } from '@utils/errors';
-import { authenticate, requireChannelAccess, apiRateLimit } from '@auth/middleware';
+import { authenticate, requireChannelAccess, requireChannelMembership, apiRateLimit } from '@auth/middleware';
 import { cacheService } from '../../services/CacheService';
 import { Cacheable, CacheEvict, CacheKeyUtils } from '@utils/cache-decorators';
 import { WebSocketUtils } from '@websocket/utils';
@@ -298,7 +298,7 @@ export const registerMessageRoutes = async (fastify: FastifyInstance) => {
   }>(
     '/channels/:channelId/messages',
     {
-      preHandler: [authenticate, requireChannelAccess],
+      preHandler: [authenticate, requireChannelMembership],
       schema: {
         params: Type.Object({
           channelId: UUIDSchema,
@@ -924,7 +924,7 @@ export const registerMessageRoutes = async (fastify: FastifyInstance) => {
   }>(
     '/channels/:channelId/messages/:messageId/thread',
     {
-      preHandler: [authenticate, requireChannelAccess],
+      preHandler: [authenticate, requireChannelMembership],
       schema: {
         params: Type.Object({
           channelId: UUIDSchema,
@@ -1234,7 +1234,7 @@ export const registerMessageRoutes = async (fastify: FastifyInstance) => {
   }>(
     '/channels/:channelId/messages/:messageId/replies',
     {
-      preHandler: [authenticate, requireChannelAccess],
+      preHandler: [authenticate, requireChannelMembership],
       schema: {
         params: Type.Object({
           channelId: UUIDSchema,

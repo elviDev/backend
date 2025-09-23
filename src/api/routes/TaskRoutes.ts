@@ -9,7 +9,7 @@ import {
   formatErrorResponse,
   createErrorContext,
 } from '@utils/errors';
-import { authenticate, authorize, authorizeRoles, requireChannelAccess, apiRateLimit, requireManagerOrCEO } from '@auth/middleware';
+import { authenticate, authorize, authorizeRoles, requireChannelAccess, requireTaskCommentAccess, apiRateLimit, requireManagerOrCEO } from '@auth/middleware';
 import { cacheService } from '../../services/CacheService';
 import { Cacheable, CacheEvict, CacheKeyUtils } from '@utils/cache-decorators';
 import { WebSocketUtils } from '@websocket/utils';
@@ -519,17 +519,37 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
           throw new AuthorizationError('You do not have access to create tasks in this channel');
         }
 
+        // Get channel details to check member list
+        const channel = await channelRepository.findById(request.body.channel_id);
+        if (!channel) {
+          throw new ValidationError('Channel not found');
+        }
+
+        // Validate that assigned users are channel members
+        if (request.body.assigned_to && request.body.assigned_to.length > 0) {
+          const channelMembers = channel.members || [];
+          const invalidAssignees = request.body.assigned_to.filter(
+            (userId: string) => !channelMembers.includes(userId)
+          );
+
+          if (invalidAssignees.length > 0) {
+            throw new ValidationError('Tasks can only be assigned to channel members', [
+              { field: 'assigned_to', message: `Users ${invalidAssignees.join(', ')} are not members of this channel`, value: invalidAssignees }
+            ]);
+          }
+        }
+
         // Check if manager is trying to assign other managers
         if (request.user!.role === 'manager' && request.body.assigned_to) {
           const { userRepository } = await import('@db/index');
           const usersToAssign = await Promise.all(
             request.body.assigned_to.map(userId => userRepository.findById(userId))
           );
-          
-          const otherManagersBeingAssigned = usersToAssign.filter(user => 
+
+          const otherManagersBeingAssigned = usersToAssign.filter(user =>
             user && user.role === 'manager' && user.id !== request.user!.userId
           );
-          
+
           if (otherManagersBeingAssigned.length > 0) {
             throw new AuthorizationError('Managers cannot assign other managers to tasks');
           }
@@ -1413,18 +1433,38 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
     async (request, reply) => {
       try {
         const { channelId } = request.params;
-        
+
+        // Get channel details to validate member assignments
+        const channel = await channelRepository.findById(channelId);
+        if (!channel) {
+          throw new ValidationError('Channel not found');
+        }
+
+        // Validate that assigned users are channel members
+        if (request.body.assigned_to && request.body.assigned_to.length > 0) {
+          const channelMembers = channel.members || [];
+          const invalidAssignees = request.body.assigned_to.filter(
+            (userId: string) => !channelMembers.includes(userId)
+          );
+
+          if (invalidAssignees.length > 0) {
+            throw new ValidationError('Tasks can only be assigned to channel members', [
+              { field: 'assigned_to', message: `Users ${invalidAssignees.join(', ')} are not members of this channel`, value: invalidAssignees }
+            ]);
+          }
+        }
+
         // Check if manager is trying to assign other managers
         if (request.user!.role === 'manager' && request.body.assigned_to) {
           const { userRepository } = await import('@db/index');
           const usersToAssign = await Promise.all(
             request.body.assigned_to.map(userId => userRepository.findById(userId))
           );
-          
-          const otherManagersBeingAssigned = usersToAssign.filter(user => 
+
+          const otherManagersBeingAssigned = usersToAssign.filter(user =>
             user && user.role === 'manager' && user.id !== request.user!.userId
           );
-          
+
           if (otherManagersBeingAssigned.length > 0) {
             throw new AuthorizationError('Managers cannot assign other managers to tasks');
           }
@@ -1913,7 +1953,7 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
   }>(
     '/tasks/:taskId/comments',
     {
-      preHandler: [authenticate, apiRateLimit],
+      preHandler: [authenticate, requireTaskCommentAccess, apiRateLimit],
       schema: {
         params: Type.Object({
           taskId: UUIDSchema,
@@ -1999,7 +2039,7 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
   }>(
     '/tasks/:taskId/comments/:commentId',
     {
-      preHandler: [authenticate, apiRateLimit],
+      preHandler: [authenticate, requireTaskCommentAccess, apiRateLimit],
       schema: {
         params: Type.Object({
           taskId: UUIDSchema,
@@ -2079,7 +2119,7 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
   }>(
     '/tasks/:taskId/comments/:commentId',
     {
-      preHandler: [authenticate, apiRateLimit],
+      preHandler: [authenticate, requireTaskCommentAccess, apiRateLimit],
       schema: {
         params: Type.Object({
           taskId: UUIDSchema,
@@ -2159,7 +2199,7 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
   }>(
     '/tasks/:taskId/comments/:commentId/reactions',
     {
-      preHandler: [authenticate, apiRateLimit],
+      preHandler: [authenticate, requireTaskCommentAccess, apiRateLimit],
       schema: {
         params: Type.Object({
           taskId: UUIDSchema,
@@ -2251,7 +2291,7 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
   }>(
     '/tasks/:taskId/comments/:commentId/reactions',
     {
-      preHandler: [authenticate, apiRateLimit],
+      preHandler: [authenticate, requireTaskCommentAccess, apiRateLimit],
       schema: {
         params: Type.Object({
           taskId: UUIDSchema,
