@@ -14,14 +14,49 @@ export interface PasswordResetData {
     userName: string;
     resetToken: string;
 }
+export interface ChannelMemberData {
+    userEmail: string;
+    userName: string;
+    channelName: string;
+    channelDescription?: string;
+    addedByName: string;
+}
+export interface TaskAssignmentData {
+    userEmail: string;
+    userName: string;
+    taskTitle: string;
+    taskDescription?: string;
+    assignedByName: string;
+    dueDate?: string;
+    priority?: string;
+}
+export interface TaskStatusChangeData {
+    userEmail: string;
+    userName: string;
+    taskTitle: string;
+    oldStatus: string;
+    newStatus: string;
+    changedByName: string;
+}
+export interface WelcomeEmailData {
+    userEmail: string;
+    userName: string;
+    role: string;
+}
 declare class EmailService {
-    private transporter;
+    private resend;
     private readonly frontendUrl;
+    private readonly fromEmail;
+    private readonly fromName;
     constructor();
-    private setupTransporter;
     sendEmail(options: EmailOptions): Promise<boolean>;
+    sendWelcomeEmail(data: WelcomeEmailData): Promise<boolean>;
     sendEmailVerification(data: EmailVerificationData): Promise<boolean>;
+    sendVerificationLinkResend(data: EmailVerificationData): Promise<boolean>;
     sendPasswordReset(data: PasswordResetData): Promise<boolean>;
+    sendChannelMemberAdded(data: ChannelMemberData): Promise<boolean>;
+    sendTaskAssigned(data: TaskAssignmentData): Promise<boolean>;
+    sendTaskStatusChanged(data: TaskStatusChangeData): Promise<boolean>;
 }
 export declare const emailService: EmailService;
 export {};

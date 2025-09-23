@@ -14,6 +14,7 @@ import { registerReactionRoutes } from './routes/ReactionRoutes';
 import { registerActivityRoutes } from './routes/ActivityRoutes';
 import { notificationRoutes } from './routes/NotificationRoutes';
 import { announcementRoutes } from './routes/AnnouncementRoutes';
+import { registerDebugEmailRoutes } from './routes/DebugEmailRoutes';
 import { logger } from '../utils/logger';
 
 /**
@@ -32,6 +33,12 @@ export const registerAPIRoutes = async (fastify: FastifyInstance): Promise<void>
     await fastify.register(registerDocsRoutes);
     await fastify.register(notificationRoutes);
     await fastify.register(announcementRoutes);
+
+    // Debug routes (only in development)
+    if (process.env.NODE_ENV === 'development') {
+      await fastify.register(registerDebugEmailRoutes);
+      logger.debug('Debug email routes registered');
+    }
 
     logger.debug('All API routes registered');
   } catch (error) {

@@ -13,6 +13,7 @@ exports.registerChannelRoutes = void 0;
 const typebox_1 = require("@sinclair/typebox");
 const index_1 = require("@db/index");
 const logger_1 = require("@utils/logger");
+const EmailService_1 = require("@/services/EmailService");
 const errors_1 = require("@utils/errors");
 const middleware_1 = require("@auth/middleware");
 const CacheService_1 = require("../../services/CacheService");
@@ -71,13 +72,37 @@ const ChannelResponseSchema = typebox_1.Type.Object({
     last_activity: typebox_1.Type.Optional(typebox_1.Type.String({ format: 'date-time' })),
     created_at: typebox_1.Type.String({ format: 'date-time' }),
     updated_at: typebox_1.Type.String({ format: 'date-time' }),
+    member_details: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.Object({
+        id: validation_1.UUIDSchema,
+        name: typebox_1.Type.String(),
+        email: typebox_1.Type.String(),
+        role: typebox_1.Type.String(),
+        avatar_url: typebox_1.Type.Optional(typebox_1.Type.String()),
+    }))),
+    tasks: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.Object({
+        id: validation_1.UUIDSchema,
+        title: typebox_1.Type.String(),
+        status: typebox_1.Type.String(),
+        priority: typebox_1.Type.String(),
+        assignee_details: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.Object({
+            id: validation_1.UUIDSchema,
+            name: typebox_1.Type.String(),
+            email: typebox_1.Type.String(),
+            avatar_url: typebox_1.Type.Optional(typebox_1.Type.String()),
+            role: typebox_1.Type.String(),
+            phone: typebox_1.Type.Optional(typebox_1.Type.String()),
+        }))),
+    }))),
 });
 /**
  * Channel service with caching
  */
 class ChannelService {
     async getChannelById(channelId) {
-        return await index_1.channelRepository.findById(channelId);
+        return await index_1.channelRepository.findWithFullDetails(channelId);
+    }
+    async getAllChannelsForUser(userId, userRole) {
+        return await index_1.channelRepository.findAccessibleByUserWithDetails(userId, userRole);
     }
     async updateChannel(channelId, updateData) {
         // Map frontend fields to backend fields
@@ -183,8 +208,8 @@ const registerChannelRoutes = async (fastify) => {
                 filters.parent_id = parent_id;
             if (search)
                 filters.search = search;
-            // Get channels user has access to based on their role
-            const result = await index_1.channelRepository.findUserChannels(request.user.userId, request.user.role);
+            // Get channels user has access to based on their role with full details
+            const result = await channelService.getAllChannelsForUser(request.user.userId, request.user.role);
             logger_1.loggers.api.info({
                 userId: request.user?.userId,
                 filters,
@@ -738,12 +763,30 @@ const registerChannelRoutes = async (fastify) => {
             if (!success) {
                 throw new errors_1.ValidationError('Failed to add member to channel', []);
             }
+            // Get channel and user details for email notification
+            const [channel, addedUser, currentUser] = await Promise.all([
+                index_1.channelRepository.findById(id),
+                index_1.userRepository.findById(user_id),
+                index_1.userRepository.findById(request.user.userId)
+            ]);
+            // Send email notification to added member
+            if (channel && addedUser && currentUser) {
+                EmailService_1.emailService.sendChannelMemberAdded({
+                    userEmail: addedUser.email,
+                    userName: addedUser.name,
+                    channelName: channel.name,
+                    channelDescription: channel.description || undefined,
+                    addedByName: currentUser.name,
+                }).catch(error => {
+                    logger_1.logger.warn({ error, userId: user_id, channelId: id }, 'Failed to send channel member added email');
+                });
+            }
             // Broadcast member addition
             await utils_1.WebSocketUtils.sendToChannel(id, 'user_joined_channel', {
                 type: 'user_joined_channel',
                 channelId: id,
                 userId: user_id,
-                userName: '', // TODO: Get user name
+                userName: addedUser?.name || '', // Use actual user name
                 userRole: request.user.role,
                 memberCount: (await index_1.channelRepository.getMembers(id)).length,
                 timestamp: new Date().toISOString(),

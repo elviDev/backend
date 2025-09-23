@@ -32,8 +32,8 @@ const SendMessageSchema = typebox_1.Type.Object({
         typebox_1.Type.Literal('file'),
         typebox_1.Type.Literal('system'),
     ])),
-    reply_to: typebox_1.Type.Optional(validation_1.UUIDSchema),
-    thread_root: typebox_1.Type.Optional(validation_1.UUIDSchema),
+    reply_to_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
+    thread_root_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
     mentions: typebox_1.Type.Optional(typebox_1.Type.Array(validation_1.UUIDSchema)),
     attachments: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.Object({
         file_id: validation_1.UUIDSchema,
@@ -56,19 +56,43 @@ const MessageResponseSchema = typebox_1.Type.Object({
     channel_id: validation_1.UUIDSchema,
     task_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
     user_id: validation_1.UUIDSchema,
-    user_name: typebox_1.Type.String(),
-    user_avatar: typebox_1.Type.Optional(typebox_1.Type.String()),
+    user_details: typebox_1.Type.Object({
+        id: validation_1.UUIDSchema,
+        name: typebox_1.Type.String(),
+        email: typebox_1.Type.String(),
+        avatar_url: typebox_1.Type.Optional(typebox_1.Type.String()),
+        role: typebox_1.Type.String(),
+        phone: typebox_1.Type.Optional(typebox_1.Type.String()),
+    }),
     content: typebox_1.Type.String(),
     message_type: typebox_1.Type.String(),
     voice_data: typebox_1.Type.Optional(typebox_1.Type.Any()),
     transcription: typebox_1.Type.Optional(typebox_1.Type.String()),
     attachments: typebox_1.Type.Array(typebox_1.Type.Any()),
-    reply_to: typebox_1.Type.Optional(validation_1.UUIDSchema),
-    thread_root: typebox_1.Type.Optional(validation_1.UUIDSchema),
+    reply_to_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
+    thread_root_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
     is_edited: typebox_1.Type.Boolean(),
     is_pinned: typebox_1.Type.Boolean(),
     is_announcement: typebox_1.Type.Boolean(),
-    reactions: typebox_1.Type.Record(typebox_1.Type.String(), typebox_1.Type.Any()),
+    reactions: typebox_1.Type.Array(typebox_1.Type.Object({
+        emoji: typebox_1.Type.String(),
+        count: typebox_1.Type.Integer(),
+        users: typebox_1.Type.Array(typebox_1.Type.Object({
+            id: validation_1.UUIDSchema,
+            name: typebox_1.Type.String(),
+            avatar_url: typebox_1.Type.Optional(typebox_1.Type.String()),
+        })),
+    })),
+    thread_info: typebox_1.Type.Optional(typebox_1.Type.Object({
+        reply_count: typebox_1.Type.Integer(),
+        participant_count: typebox_1.Type.Integer(),
+        last_reply_at: typebox_1.Type.Optional(typebox_1.Type.String({ format: 'date-time' })),
+        last_reply_by_details: typebox_1.Type.Optional(typebox_1.Type.Object({
+            id: validation_1.UUIDSchema,
+            name: typebox_1.Type.String(),
+            avatar_url: typebox_1.Type.Optional(typebox_1.Type.String()),
+        })),
+    })),
     mentions: typebox_1.Type.Array(validation_1.UUIDSchema),
     ai_generated: typebox_1.Type.Boolean(),
     ai_context: typebox_1.Type.Optional(typebox_1.Type.Any()),
@@ -142,7 +166,7 @@ const registerMessageRoutes = async (fastify) => {
             querystring: typebox_1.Type.Intersect([
                 validation_1.PaginationSchema,
                 typebox_1.Type.Object({
-                    thread_root: typebox_1.Type.Optional(validation_1.UUIDSchema),
+                    thread_root_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
                     search: typebox_1.Type.Optional(typebox_1.Type.String({ maxLength: 200 })),
                     message_type: typebox_1.Type.Optional(typebox_1.Type.String()),
                     before: typebox_1.Type.Optional(typebox_1.Type.String({ format: 'date-time' })),
@@ -170,7 +194,7 @@ const registerMessageRoutes = async (fastify) => {
             // Build filters
             const filters = {
                 channelId,
-                threadRoot: thread_root,
+                threadRootId: thread_root,
                 messageType: message_type,
                 before: before ? new Date(before) : undefined,
                 after: after ? new Date(after) : undefined,
@@ -265,15 +289,15 @@ const registerMessageRoutes = async (fastify) => {
             // Update channel activity
             await index_1.channelRepository.updateActivity(channelId);
             // Determine if this is a thread message
-            const isThreadReply = message.reply_to && message.thread_root;
+            const isThreadReply = message.reply_to_id && message.thread_root_id;
             // Broadcast message to channel members with thread context
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_sent', {
                 type: 'message_sent',
                 channelId,
                 messageId: message.id,
                 isThreadReply,
-                threadRoot: message.thread_root,
-                replyTo: message.reply_to,
+                threadRootId: message.thread_root_id,
+                replyToId: message.reply_to_id,
                 message: {
                     id: message.id,
                     channel_id: message.channel_id,
@@ -287,8 +311,8 @@ const registerMessageRoutes = async (fastify) => {
                     voice_data: message.voice_data,
                     transcription: message.transcription,
                     attachments: message.attachments,
-                    reply_to: message.reply_to,
-                    thread_root: message.thread_root,
+                    reply_to_id: message.reply_to_id,
+                    thread_root_id: message.thread_root_id,
                     is_edited: message.is_edited,
                     is_pinned: message.is_pinned,
                     is_announcement: message.is_announcement,
@@ -313,8 +337,8 @@ const registerMessageRoutes = async (fastify) => {
                 await utils_1.WebSocketUtils.sendToChannel(channelId, 'thread_reply_sent', {
                     type: 'thread_reply_sent',
                     channelId,
-                    threadRoot: message.thread_root,
-                    parentMessageId: message.reply_to,
+                    threadRootId: message.thread_root_id,
+                    parentMessageId: message.reply_to_id,
                     messageId: message.id,
                     message: {
                         id: message.id,
@@ -329,8 +353,8 @@ const registerMessageRoutes = async (fastify) => {
                         voice_data: message.voice_data,
                         transcription: message.transcription,
                         attachments: message.attachments,
-                        reply_to: message.reply_to,
-                        thread_root: message.thread_root,
+                        reply_to_id: message.reply_to_id,
+                        thread_root_id: message.thread_root_id,
                         is_edited: message.is_edited,
                         is_pinned: message.is_pinned,
                         is_announcement: message.is_announcement,
@@ -591,63 +615,6 @@ const registerMessageRoutes = async (fastify) => {
         }
     });
     /**
-     * POST /channels/:channelId/messages/:messageId/reactions - Add reaction
-     */
-    fastify.post('/channels/:channelId/messages/:messageId/reactions', {
-        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess],
-        schema: {
-            params: typebox_1.Type.Object({
-                channelId: validation_1.UUIDSchema,
-                messageId: validation_1.UUIDSchema,
-            }),
-            body: typebox_1.Type.Object({
-                emoji: typebox_1.Type.String({ minLength: 1, maxLength: 10 }),
-            }),
-            response: {
-                200: validation_1.SuccessResponseSchema,
-            },
-        },
-    }, async (request, reply) => {
-        try {
-            const { channelId, messageId } = request.params;
-            const { emoji } = request.body;
-            const success = await index_1.messageRepository.addReaction(messageId, request.user.userId, emoji);
-            if (!success) {
-                throw new errors_1.NotFoundError('Message not found');
-            }
-            // Broadcast reaction
-            await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_reaction_added', {
-                type: 'message_reaction_added',
-                channelId,
-                messageId,
-                emoji,
-                userId: request.user.userId,
-                userName: request.user.name,
-                userRole: request.user.role,
-                timestamp: new Date().toISOString(),
-            });
-            reply.send({
-                success: true,
-                message: 'Reaction added successfully',
-                timestamp: new Date().toISOString(),
-            });
-        }
-        catch (error) {
-            logger_1.loggers.api.error({ error }, 'Failed to add reaction');
-            if (error instanceof errors_1.NotFoundError) {
-                reply.code(404).send((0, errors_1.formatErrorResponse)(error));
-            }
-            else {
-                reply.code(500).send({
-                    error: {
-                        message: 'Failed to add reaction',
-                        code: 'SERVER_ERROR',
-                    },
-                });
-            }
-        }
-    });
-    /**
      * GET /channels/:channelId/messages/:messageId/thread - Get thread messages
      */
     fastify.get('/channels/:channelId/messages/:messageId/thread', {
@@ -679,23 +646,20 @@ const registerMessageRoutes = async (fastify) => {
         try {
             const { channelId, messageId } = request.params;
             const { limit = 50, offset = 0 } = request.query;
-            // Get the parent message
-            const parentMessage = await index_1.messageRepository.findById(messageId);
+            // Get the parent message with user details
+            const parentMessage = await index_1.messageRepository.findByIdWithUser(messageId);
             if (!parentMessage) {
                 throw new errors_1.NotFoundError('Message not found');
             }
             // Get thread root - if this message is itself a reply, get its root
-            const threadRoot = parentMessage.thread_root || messageId;
-            // Get all replies to this thread
-            const replies = await index_1.messageRepository.findChannelMessages(channelId, { threadRoot }, Math.min(limit, 100), offset);
-            // Filter out the parent message from replies if it's included
-            const threadReplies = replies.filter(msg => msg.id !== threadRoot);
-            const total = await index_1.messageRepository.getChannelMessageCount(channelId, { threadRoot });
+            const threadRootId = parentMessage.thread_root_id || messageId;
+            // Use ThreadRepository for better thread management
+            const { replies: threadReplies, total } = await index_1.threadRepository.getThreadReplies(threadRootId, Math.min(limit, 100), offset);
             logger_1.loggers.api.info({
                 userId: request.user?.userId,
                 channelId,
                 messageId,
-                threadRoot,
+                threadRootId,
                 repliesCount: threadReplies.length,
             }, 'Thread messages retrieved');
             reply.send({
@@ -704,10 +668,10 @@ const registerMessageRoutes = async (fastify) => {
                     parentMessage,
                     replies: threadReplies,
                     pagination: {
-                        total: total - 1, // Exclude parent message from count
+                        total,
                         limit,
                         offset,
-                        hasMore: offset + limit < total - 1,
+                        hasMore: offset + limit < total,
                     },
                 },
                 timestamp: new Date().toISOString(),

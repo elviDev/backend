@@ -9,8 +9,9 @@ export interface Message extends BaseEntity {
     voice_data?: Record<string, any>;
     transcription?: string;
     attachments: any[];
-    reply_to?: string;
-    thread_root?: string;
+    reply_to_id?: string;
+    thread_root_id?: string;
+    is_thread_root: boolean;
     is_edited: boolean;
     is_pinned: boolean;
     is_announcement: boolean;
@@ -22,8 +23,6 @@ export interface Message extends BaseEntity {
     metadata: Record<string, any>;
     formatting: Record<string, any>;
     edited_at?: Date;
-    user_name?: string;
-    user_avatar?: string;
 }
 export interface CreateMessageData {
     channel_id: string;
@@ -34,8 +33,8 @@ export interface CreateMessageData {
     voice_data?: Record<string, any>;
     transcription?: string;
     attachments?: any[];
-    reply_to?: string;
-    thread_root?: string;
+    reply_to_id?: string;
+    thread_root_id?: string;
     mentions?: string[];
     ai_generated?: boolean;
     ai_context?: Record<string, any>;
@@ -44,10 +43,47 @@ export interface CreateMessageData {
     formatting?: Record<string, any>;
 }
 export interface MessageWithUser extends Message {
-    user_name: string;
-    user_email: string;
-    user_avatar?: string;
-    user_role: string;
+    user_details: {
+        id: string;
+        name: string;
+        email: string;
+        avatar_url?: string;
+        role: string;
+        phone?: string;
+    };
+    reply_to?: {
+        id: string;
+        content: string;
+        user: {
+            id: string;
+            name: string;
+            avatar_url?: string;
+        };
+    };
+    thread_info?: {
+        reply_count: number;
+        participant_count: number;
+        last_reply_at?: Date;
+        last_reply_by?: {
+            id: string;
+            name: string;
+            avatar_url?: string;
+        };
+        participants: Array<{
+            id: string;
+            name: string;
+            avatar_url?: string;
+        }>;
+    };
+    reactions: Array<{
+        emoji: string;
+        count: number;
+        users: Array<{
+            id: string;
+            name: string;
+            avatar_url?: string;
+        }>;
+    }>;
     reply_count?: number;
     last_reply_timestamp?: Date;
     deleted_by_name?: string;
@@ -62,7 +98,7 @@ declare class MessageRepository extends BaseRepository<Message> {
      * Find messages in a channel
      */
     findChannelMessages(channelId: string, filters?: {
-        threadRoot?: string;
+        threadRootId?: string;
         messageType?: string;
         before?: Date;
         after?: Date;
@@ -72,12 +108,16 @@ declare class MessageRepository extends BaseRepository<Message> {
      * Get channel message count
      */
     getChannelMessageCount(channelId: string, filters?: {
-        threadRoot?: string;
+        threadRootId?: string;
         messageType?: string;
         before?: Date;
         after?: Date;
         includeThreadReplies?: boolean;
     }, client?: DatabaseClient): Promise<number>;
+    /**
+     * Find message by ID with user details
+     */
+    findByIdWithUser(messageId: string, client?: DatabaseClient): Promise<MessageWithUser | null>;
     /**
      * Search messages in channel
      */

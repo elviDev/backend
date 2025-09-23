@@ -281,14 +281,24 @@ export const registerAuthRoutes = async (fastify: FastifyInstance) => {
         const verificationToken = jwtService.generateEmailVerificationToken(user.id, user.email);
         await userRepository.setEmailVerificationToken(user.id, verificationToken);
 
-        // Send verification email
-        const emailSent = await emailService.sendEmailVerification({
-          userEmail: user.email,
-          userName: user.name,
-          verificationToken,
-        });
+        // Send welcome and verification emails
+        const [welcomeEmailSent, verificationEmailSent] = await Promise.all([
+          emailService.sendWelcomeEmail({
+            userEmail: user.email,
+            userName: user.name,
+            role: user.role,
+          }),
+          emailService.sendEmailVerification({
+            userEmail: user.email,
+            userName: user.name,
+            verificationToken,
+          })
+        ]);
 
-        if (!emailSent) {
+        if (!welcomeEmailSent) {
+          logger.warn({ userId: user.id, email: user.email }, 'Failed to send welcome email');
+        }
+        if (!verificationEmailSent) {
           logger.warn({ userId: user.id, email: user.email }, 'Failed to send verification email');
         }
 
@@ -297,7 +307,8 @@ export const registerAuthRoutes = async (fastify: FastifyInstance) => {
           email: user.email,
           role: user.role,
           ip: request.ip,
-          emailSent,
+          welcomeEmailSent,
+          verificationEmailSent,
         });
 
         reply.code(201).send({
@@ -776,8 +787,8 @@ export const registerAuthRoutes = async (fastify: FastifyInstance) => {
         const verificationToken = jwtService.generateEmailVerificationToken(user.id, user.email);
         await userRepository.setEmailVerificationToken(user.id, verificationToken);
 
-        // Send verification email
-        const emailSent = await emailService.sendEmailVerification({
+        // Send verification link resend email
+        const emailSent = await emailService.sendVerificationLinkResend({
           userEmail: user.email,
           userName: user.name,
           verificationToken,

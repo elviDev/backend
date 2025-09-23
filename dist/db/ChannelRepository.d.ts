@@ -51,6 +51,20 @@ export interface ChannelWithDetails extends Channel {
         role: string;
         avatar_url?: string;
     }>;
+    tasks?: Array<{
+        id: string;
+        title: string;
+        status: string;
+        priority: string;
+        assignee_details?: Array<{
+            id: string;
+            name: string;
+            email: string;
+            avatar_url?: string;
+            role: string;
+            phone?: string;
+        }>;
+    }>;
 }
 declare class ChannelRepository extends BaseRepository<Channel> {
     constructor();
@@ -90,6 +104,14 @@ declare class ChannelRepository extends BaseRepository<Channel> {
      * Get channel with detailed member information
      */
     findWithMembers(channelId: string, client?: DatabaseClient): Promise<ChannelWithDetails | null>;
+    /**
+     * Get channel with detailed member information and tasks with assignee details
+     */
+    findWithFullDetails(channelId: string, client?: DatabaseClient): Promise<ChannelWithDetails | null>;
+    /**
+     * Find channels accessible by user with full details (members and tasks)
+     */
+    findAccessibleByUserWithDetails(userId: string, userRole: string, client?: DatabaseClient): Promise<ChannelWithDetails[]>;
     /**
      * Search channels by name or description
      */

@@ -40,7 +40,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.validateMigrations = exports.getMigrationStatus = exports.rollbackLastMigration = exports.runMigrations = exports.DatabaseManager = exports.databaseMetrics = exports.getPoolStats = exports.healthCheck = exports.transaction = exports.query = exports.getPool = exports.closeDatabase = exports.initializeDatabase = exports.repositories = exports.commentRepository = exports.announcementRepository = exports.fileRepository = exports.activityRepository = exports.messageRepository = exports.taskRepository = exports.channelRepository = exports.userRepository = exports.CommentRepository = exports.AnnouncementRepository = exports.FileRepository = exports.ActivityRepository = exports.MessageRepository = exports.TaskRepository = exports.ChannelRepository = exports.UserRepository = exports.BaseRepository = void 0;
+exports.validateMigrations = exports.getMigrationStatus = exports.rollbackLastMigration = exports.runMigrations = exports.DatabaseManager = exports.databaseMetrics = exports.getPoolStats = exports.healthCheck = exports.transaction = exports.query = exports.getPool = exports.closeDatabase = exports.initializeDatabase = exports.repositories = exports.reactionRepository = exports.threadRepository = exports.commentRepository = exports.announcementRepository = exports.fileRepository = exports.activityRepository = exports.messageRepository = exports.taskRepository = exports.channelRepository = exports.userRepository = exports.ReactionRepository = exports.ThreadRepository = exports.CommentRepository = exports.AnnouncementRepository = exports.FileRepository = exports.ActivityRepository = exports.MessageRepository = exports.TaskRepository = exports.ChannelRepository = exports.UserRepository = exports.BaseRepository = void 0;
 // Base repository
 var BaseRepository_1 = require("./BaseRepository");
 Object.defineProperty(exports, "BaseRepository", { enumerable: true, get: function () { return __importDefault(BaseRepository_1).default; } });
@@ -61,6 +61,10 @@ var AnnouncementRepository_1 = require("./AnnouncementRepository");
 Object.defineProperty(exports, "AnnouncementRepository", { enumerable: true, get: function () { return __importDefault(AnnouncementRepository_1).default; } });
 var CommentRepository_1 = require("./CommentRepository");
 Object.defineProperty(exports, "CommentRepository", { enumerable: true, get: function () { return CommentRepository_1.CommentRepository; } });
+var ThreadRepository_1 = require("./ThreadRepository");
+Object.defineProperty(exports, "ThreadRepository", { enumerable: true, get: function () { return __importDefault(ThreadRepository_1).default; } });
+var ReactionRepository_1 = require("./ReactionRepository");
+Object.defineProperty(exports, "ReactionRepository", { enumerable: true, get: function () { return __importDefault(ReactionRepository_1).default; } });
 // Repository instances for dependency injection
 const UserRepository_2 = __importDefault(require("./UserRepository"));
 const ChannelRepository_2 = __importDefault(require("./ChannelRepository"));
@@ -70,6 +74,8 @@ const ActivityRepository_2 = __importDefault(require("./ActivityRepository"));
 const FileRepository_2 = __importDefault(require("./FileRepository"));
 const AnnouncementRepository_2 = __importDefault(require("./AnnouncementRepository"));
 const CommentRepository_2 = require("./CommentRepository");
+const ThreadRepository_2 = __importDefault(require("./ThreadRepository"));
+const ReactionRepository_2 = __importDefault(require("./ReactionRepository"));
 // Create singleton instances
 exports.userRepository = new UserRepository_2.default();
 exports.channelRepository = new ChannelRepository_2.default();
@@ -79,6 +85,8 @@ exports.activityRepository = new ActivityRepository_2.default();
 exports.fileRepository = new FileRepository_2.default();
 exports.announcementRepository = new AnnouncementRepository_2.default();
 exports.commentRepository = new CommentRepository_2.CommentRepository();
+exports.threadRepository = new ThreadRepository_2.default();
+exports.reactionRepository = new ReactionRepository_2.default();
 // Repository collection for easy access
 exports.repositories = {
     users: exports.userRepository,
@@ -89,6 +97,8 @@ exports.repositories = {
     files: exports.fileRepository,
     announcements: exports.announcementRepository,
     comments: exports.commentRepository,
+    threads: exports.threadRepository,
+    reactions: exports.reactionRepository,
 };
 // Database configuration and utilities
 var database_1 = require("../config/database");

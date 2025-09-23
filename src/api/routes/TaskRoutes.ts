@@ -1,7 +1,8 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { Type } from '@sinclair/typebox';
-import { taskRepository, channelRepository, activityRepository, commentRepository } from '@db/index';
+import { taskRepository, channelRepository, activityRepository, commentRepository, userRepository } from '@db/index';
 import { logger, loggers } from '@utils/logger';
+import { emailService } from '@/services/EmailService';
 import {
   ValidationError,
   NotFoundError,
@@ -598,10 +599,19 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
           userRole: request.user!.role,
         });
 
-        // Send notifications to assignees
+        // Send notifications and emails to assignees
         if (task.assigned_to.length > 0) {
-          for (const assigneeId of task.assigned_to) {
-            if (assigneeId !== request.user!.userId) {
+          const [currentUser, assigneeUsers] = await Promise.all([
+            userRepository.findById(request.user!.userId),
+            Promise.all(task.assigned_to.map(id => userRepository.findById(id)))
+          ]);
+
+          for (let i = 0; i < task.assigned_to.length; i++) {
+            const assigneeId = task.assigned_to[i];
+            const assigneeUser = assigneeUsers[i];
+
+            if (assigneeId && assigneeId !== request.user!.userId && assigneeUser && currentUser) {
+              // Send WebSocket notification
               await WebSocketUtils.createAndSendNotification(assigneeId, {
                 title: 'New Task Assigned',
                 message: `You have been assigned to task: ${task.title}`,
@@ -611,6 +621,19 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
                 actionUrl: `/tasks/${task.id}`,
                 actionText: 'View Task',
                 data: { taskId: task.id, taskTitle: task.title },
+              });
+
+              // Send email notification
+              emailService.sendTaskAssigned({
+                userEmail: assigneeUser.email,
+                userName: assigneeUser.name || 'User',
+                taskTitle: task.title,
+                taskDescription: task.description || undefined,
+                assignedByName: currentUser.name || 'Someone',
+                dueDate: task.due_date?.toLocaleDateString() || undefined,
+                priority: task.priority || undefined,
+              }).catch(error => {
+                logger.warn({ error, userId: assigneeId, taskId: task.id }, 'Failed to send task assignment email');
               });
             }
           }
@@ -814,6 +837,13 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
         const { id } = request.params;
         const { status } = request.body;
 
+        // Get current task to capture old status
+        const oldTask = await taskRepository.findById(id);
+        if (!oldTask) {
+          throw new NotFoundError('Task not found');
+        }
+        const oldStatus = oldTask.status;
+
         const task = await taskRepository.updateStatus(id, status as any, request.user!.userId);
 
         // Create activity for task status update
@@ -879,18 +909,41 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
           userRole: request.user!.role,
         });
 
-        // Send completion notification
-        if (status === 'completed') {
-          for (const assigneeId of task.assigned_to) {
-            if (assigneeId !== request.user!.userId) {
-              await WebSocketUtils.createAndSendNotification(assigneeId, {
-                title: 'Task Completed',
-                message: `Task "${task.title}" has been completed`,
-                category: 'task',
-                priority: 'medium',
-                actionUrl: `/tasks/${task.id}`,
-                actionText: 'View Task',
-                data: { taskId: task.id, taskTitle: task.title },
+        // Send status change notifications and emails
+        if (oldStatus !== status) {
+          const [currentUser, assigneeUsers] = await Promise.all([
+            userRepository.findById(request.user!.userId),
+            Promise.all(task.assigned_to.map(id => userRepository.findById(id)))
+          ]);
+
+          for (let i = 0; i < task.assigned_to.length; i++) {
+            const assigneeId = task.assigned_to[i];
+            const assigneeUser = assigneeUsers[i];
+
+            if (assigneeId && assigneeId !== request.user!.userId && assigneeUser && currentUser) {
+              // Send WebSocket notification
+              if (status === 'completed') {
+                await WebSocketUtils.createAndSendNotification(assigneeId, {
+                  title: 'Task Completed',
+                  message: `Task "${task.title}" has been completed`,
+                  category: 'task',
+                  priority: 'medium',
+                  actionUrl: `/tasks/${task.id}`,
+                  actionText: 'View Task',
+                  data: { taskId: task.id, taskTitle: task.title },
+                });
+              }
+
+              // Send email notification for status change
+              emailService.sendTaskStatusChanged({
+                userEmail: assigneeUser.email,
+                userName: assigneeUser.name || 'User',
+                taskTitle: task.title,
+                oldStatus: oldStatus,
+                newStatus: status,
+                changedByName: currentUser.name || 'Someone',
+              }).catch(error => {
+                logger.warn({ error, userId: assigneeId, taskId: task.id }, 'Failed to send task status change email');
               });
             }
           }
@@ -1049,18 +1102,42 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
             userRole: request.user!.role,
           });
 
-          // Send notifications to newly assigned users
-          for (const userId of user_ids) {
-            await WebSocketUtils.createAndSendNotification(userId, {
-              title: 'Task Assigned',
-              message: `You have been assigned to task: ${task.title}`,
-              category: 'task',
-              priority:
-                task.priority === 'critical' || task.priority === 'urgent' ? 'high' : 'medium',
-              actionUrl: `/tasks/${task.id}`,
-              actionText: 'View Task',
-              data: { taskId: task.id, taskTitle: task.title },
-            });
+          // Send notifications and emails to newly assigned users
+          const [currentUser, assigneeUsers] = await Promise.all([
+            userRepository.findById(request.user!.userId),
+            Promise.all(user_ids.map(id => userRepository.findById(id)))
+          ]);
+
+          for (let i = 0; i < user_ids.length; i++) {
+            const userId = user_ids[i];
+            const assigneeUser = assigneeUsers[i];
+
+            if (userId && assigneeUser && currentUser) {
+              // Send WebSocket notification
+              await WebSocketUtils.createAndSendNotification(userId, {
+                title: 'Task Assigned',
+                message: `You have been assigned to task: ${task.title}`,
+                category: 'task',
+                priority:
+                  task.priority === 'critical' || task.priority === 'urgent' ? 'high' : 'medium',
+                actionUrl: `/tasks/${task.id}`,
+                actionText: 'View Task',
+                data: { taskId: task.id, taskTitle: task.title },
+              });
+
+              // Send email notification
+              emailService.sendTaskAssigned({
+                userEmail: assigneeUser.email,
+                userName: assigneeUser.name || 'User',
+                taskTitle: task.title,
+                taskDescription: task.description || undefined,
+                assignedByName: currentUser.name || 'Someone',
+                dueDate: task.due_date?.toLocaleDateString() || undefined,
+                priority: task.priority || undefined,
+              }).catch(error => {
+                logger.warn({ error, userId, taskId: task.id }, 'Failed to send task assignment email');
+              });
+            }
           }
         }
 

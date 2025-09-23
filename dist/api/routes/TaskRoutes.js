@@ -46,6 +46,7 @@ exports.registerTaskRoutes = void 0;
 const typebox_1 = require("@sinclair/typebox");
 const index_1 = require("@db/index");
 const logger_1 = require("@utils/logger");
+const EmailService_1 = require("@/services/EmailService");
 const errors_1 = require("@utils/errors");
 const middleware_1 = require("@auth/middleware");
 const CacheService_1 = require("../../services/CacheService");
@@ -155,16 +156,6 @@ class TaskService {
         return await index_1.taskRepository.createTask(taskData);
     }
 }
-__decorate([
-    (0, cache_decorators_1.Cacheable)({
-        ttl: 900, // 15 minutes
-        namespace: 'tasks',
-        keyGenerator: (taskId) => cache_decorators_1.CacheKeyUtils.taskKey(taskId),
-    }),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
-    __metadata("design:returntype", Promise)
-], TaskService.prototype, "getTaskById", null);
 __decorate([
     (0, cache_decorators_1.CacheEvict)({
         keys: (taskId) => [cache_decorators_1.CacheKeyUtils.taskKey(taskId)],
@@ -552,10 +543,17 @@ const registerTaskRoutes = async (fastify) => {
                 userName: request.user.name,
                 userRole: request.user.role,
             });
-            // Send notifications to assignees
+            // Send notifications and emails to assignees
             if (task.assigned_to.length > 0) {
-                for (const assigneeId of task.assigned_to) {
-                    if (assigneeId !== request.user.userId) {
+                const [currentUser, assigneeUsers] = await Promise.all([
+                    index_1.userRepository.findById(request.user.userId),
+                    Promise.all(task.assigned_to.map(id => index_1.userRepository.findById(id)))
+                ]);
+                for (let i = 0; i < task.assigned_to.length; i++) {
+                    const assigneeId = task.assigned_to[i];
+                    const assigneeUser = assigneeUsers[i];
+                    if (assigneeId && assigneeId !== request.user.userId && assigneeUser && currentUser) {
+                        // Send WebSocket notification
                         await utils_1.WebSocketUtils.createAndSendNotification(assigneeId, {
                             title: 'New Task Assigned',
                             message: `You have been assigned to task: ${task.title}`,
@@ -564,6 +562,18 @@ const registerTaskRoutes = async (fastify) => {
                             actionUrl: `/tasks/${task.id}`,
                             actionText: 'View Task',
                             data: { taskId: task.id, taskTitle: task.title },
+                        });
+                        // Send email notification
+                        EmailService_1.emailService.sendTaskAssigned({
+                            userEmail: assigneeUser.email,
+                            userName: assigneeUser.name || 'User',
+                            taskTitle: task.title,
+                            taskDescription: task.description || undefined,
+                            assignedByName: currentUser.name || 'Someone',
+                            dueDate: task.due_date?.toLocaleDateString() || undefined,
+                            priority: task.priority || undefined,
+                        }).catch(error => {
+                            logger_1.logger.warn({ error, userId: assigneeId, taskId: task.id }, 'Failed to send task assignment email');
                         });
                     }
                 }
@@ -737,6 +747,12 @@ const registerTaskRoutes = async (fastify) => {
         try {
             const { id } = request.params;
             const { status } = request.body;
+            // Get current task to capture old status
+            const oldTask = await index_1.taskRepository.findById(id);
+            if (!oldTask) {
+                throw new errors_1.NotFoundError('Task not found');
+            }
+            const oldStatus = oldTask.status;
             const task = await index_1.taskRepository.updateStatus(id, status, request.user.userId);
             // Create activity for task status update
             try {
@@ -797,18 +813,38 @@ const registerTaskRoutes = async (fastify) => {
                 userName: request.user.name,
                 userRole: request.user.role,
             });
-            // Send completion notification
-            if (status === 'completed') {
-                for (const assigneeId of task.assigned_to) {
-                    if (assigneeId !== request.user.userId) {
-                        await utils_1.WebSocketUtils.createAndSendNotification(assigneeId, {
-                            title: 'Task Completed',
-                            message: `Task "${task.title}" has been completed`,
-                            category: 'task',
-                            priority: 'medium',
-                            actionUrl: `/tasks/${task.id}`,
-                            actionText: 'View Task',
-                            data: { taskId: task.id, taskTitle: task.title },
+            // Send status change notifications and emails
+            if (oldStatus !== status) {
+                const [currentUser, assigneeUsers] = await Promise.all([
+                    index_1.userRepository.findById(request.user.userId),
+                    Promise.all(task.assigned_to.map(id => index_1.userRepository.findById(id)))
+                ]);
+                for (let i = 0; i < task.assigned_to.length; i++) {
+                    const assigneeId = task.assigned_to[i];
+                    const assigneeUser = assigneeUsers[i];
+                    if (assigneeId && assigneeId !== request.user.userId && assigneeUser && currentUser) {
+                        // Send WebSocket notification
+                        if (status === 'completed') {
+                            await utils_1.WebSocketUtils.createAndSendNotification(assigneeId, {
+                                title: 'Task Completed',
+                                message: `Task "${task.title}" has been completed`,
+                                category: 'task',
+                                priority: 'medium',
+                                actionUrl: `/tasks/${task.id}`,
+                                actionText: 'View Task',
+                                data: { taskId: task.id, taskTitle: task.title },
+                            });
+                        }
+                        // Send email notification for status change
+                        EmailService_1.emailService.sendTaskStatusChanged({
+                            userEmail: assigneeUser.email,
+                            userName: assigneeUser.name || 'User',
+                            taskTitle: task.title,
+                            oldStatus: oldStatus,
+                            newStatus: status,
+                            changedByName: currentUser.name || 'Someone',
+                        }).catch(error => {
+                            logger_1.logger.warn({ error, userId: assigneeId, taskId: task.id }, 'Failed to send task status change email');
                         });
                     }
                 }
@@ -942,17 +978,38 @@ const registerTaskRoutes = async (fastify) => {
                     userName: request.user.name,
                     userRole: request.user.role,
                 });
-                // Send notifications to newly assigned users
-                for (const userId of user_ids) {
-                    await utils_1.WebSocketUtils.createAndSendNotification(userId, {
-                        title: 'Task Assigned',
-                        message: `You have been assigned to task: ${task.title}`,
-                        category: 'task',
-                        priority: task.priority === 'critical' || task.priority === 'urgent' ? 'high' : 'medium',
-                        actionUrl: `/tasks/${task.id}`,
-                        actionText: 'View Task',
-                        data: { taskId: task.id, taskTitle: task.title },
-                    });
+                // Send notifications and emails to newly assigned users
+                const [currentUser, assigneeUsers] = await Promise.all([
+                    index_1.userRepository.findById(request.user.userId),
+                    Promise.all(user_ids.map(id => index_1.userRepository.findById(id)))
+                ]);
+                for (let i = 0; i < user_ids.length; i++) {
+                    const userId = user_ids[i];
+                    const assigneeUser = assigneeUsers[i];
+                    if (userId && assigneeUser && currentUser) {
+                        // Send WebSocket notification
+                        await utils_1.WebSocketUtils.createAndSendNotification(userId, {
+                            title: 'Task Assigned',
+                            message: `You have been assigned to task: ${task.title}`,
+                            category: 'task',
+                            priority: task.priority === 'critical' || task.priority === 'urgent' ? 'high' : 'medium',
+                            actionUrl: `/tasks/${task.id}`,
+                            actionText: 'View Task',
+                            data: { taskId: task.id, taskTitle: task.title },
+                        });
+                        // Send email notification
+                        EmailService_1.emailService.sendTaskAssigned({
+                            userEmail: assigneeUser.email,
+                            userName: assigneeUser.name || 'User',
+                            taskTitle: task.title,
+                            taskDescription: task.description || undefined,
+                            assignedByName: currentUser.name || 'Someone',
+                            dueDate: task.due_date?.toLocaleDateString() || undefined,
+                            priority: task.priority || undefined,
+                        }).catch(error => {
+                            logger_1.logger.warn({ error, userId, taskId: task.id }, 'Failed to send task assignment email');
+                        });
+                    }
                 }
             }
             logger_1.loggers.api.info({
@@ -1163,7 +1220,7 @@ const registerTaskRoutes = async (fastify) => {
                 priority,
                 assignedTo: assigned_to ? [assigned_to] : undefined,
             };
-            const tasks = await index_1.taskRepository.findWithFilters(filters, Math.min(limit, 100), offset);
+            const tasks = await index_1.taskRepository.findWithFiltersAndDetails(filters, Math.min(limit, 100), offset);
             const total = tasks.length; // Simplified - in production, implement proper count query
             logger_1.loggers.api.info({
                 userId: request.user?.userId,

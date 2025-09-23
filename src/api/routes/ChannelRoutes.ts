@@ -1,8 +1,9 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { Type } from '@sinclair/typebox';
-import { channelRepository, messageRepository, activityRepository, fileRepository } from '@db/index';
+import { channelRepository, messageRepository, activityRepository, fileRepository, userRepository } from '@db/index';
 import { Activity } from '../../db/ActivityRepository';
 import { logger, loggers } from '@utils/logger';
+import { emailService } from '@/services/EmailService';
 import {
   ValidationError,
   NotFoundError,
@@ -869,12 +870,32 @@ export const registerChannelRoutes = async (fastify: FastifyInstance) => {
           throw new ValidationError('Failed to add member to channel', []);
         }
 
+        // Get channel and user details for email notification
+        const [channel, addedUser, currentUser] = await Promise.all([
+          channelRepository.findById(id),
+          userRepository.findById(user_id),
+          userRepository.findById(request.user!.userId)
+        ]);
+
+        // Send email notification to added member
+        if (channel && addedUser && currentUser) {
+          emailService.sendChannelMemberAdded({
+            userEmail: addedUser.email,
+            userName: addedUser.name,
+            channelName: channel.name,
+            channelDescription: channel.description || undefined,
+            addedByName: currentUser.name,
+          }).catch(error => {
+            logger.warn({ error, userId: user_id, channelId: id }, 'Failed to send channel member added email');
+          });
+        }
+
         // Broadcast member addition
         await WebSocketUtils.sendToChannel(id, 'user_joined_channel', {
           type: 'user_joined_channel',
           channelId: id,
           userId: user_id,
-          userName: '', // TODO: Get user name
+          userName: addedUser?.name || '', // Use actual user name
           userRole: request.user!.role,
           memberCount: (await channelRepository.getMembers(id)).length,
           timestamp: new Date().toISOString(),
