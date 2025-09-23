@@ -31,9 +31,9 @@ import {
 const CreateTaskSchema = Type.Object({
   title: Type.String({ minLength: 1, maxLength: 255 }),
   description: Type.Optional(Type.String({ maxLength: 2000 })),
-  channel_id: Type.Optional(UUIDSchema),
+  channel_id: UUIDSchema, // REQUIRED - every task must belong to a channel
   parent_task_id: Type.Optional(UUIDSchema),
-  assigned_to: Type.Optional(Type.Array(UUIDSchema)),
+  assigned_to: Type.Optional(Type.Array(UUIDSchema, { minItems: 1 })),
   owned_by: Type.Optional(UUIDSchema),
   priority: Type.Optional(TaskPrioritySchema),
   task_type: Type.Optional(
@@ -503,17 +503,20 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
     },
     async (request, reply) => {
       try {
-        // If channel_id is specified, verify user has access to the channel
-        if (request.body.channel_id) {
-          const hasChannelAccess = await channelRepository.canUserAccess(
-            request.body.channel_id,
-            request.user!.userId,
-            request.user!.role
-          );
+        // Channel ID is now REQUIRED - every task must belong to a channel
+        if (!request.body.channel_id) {
+          throw new ValidationError('channel_id is required - every task must belong to a channel');
+        }
 
-          if (!hasChannelAccess) {
-            throw new AuthorizationError('You do not have access to create tasks in this channel');
-          }
+        // Verify user has access to the channel
+        const hasChannelAccess = await channelRepository.canUserAccess(
+          request.body.channel_id,
+          request.user!.userId,
+          request.user!.role
+        );
+
+        if (!hasChannelAccess) {
+          throw new AuthorizationError('You do not have access to create tasks in this channel');
         }
 
         // Check if manager is trying to assign other managers
@@ -532,16 +535,31 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
           }
         }
 
+        // Ensure task always has assignees - prevents unassigned tasks
+        const assignedTo = request.body.assigned_to && request.body.assigned_to.length > 0
+          ? request.body.assigned_to
+          : [request.user!.userId];
+
         const taskData = {
           ...request.body,
           created_by: request.user!.userId,
-          assigned_to: request.body.assigned_to || [request.user!.userId],
-          owned_by: request.body.owned_by || request.user!.userId,
+          assigned_to: assignedTo,
+          owned_by: request.body.owned_by || assignedTo[0],
           tags: request.body.tags || [],
           labels: request.body.labels || {},
           due_date: request.body.due_date ? new Date(request.body.due_date) : undefined,
           start_date: request.body.start_date ? new Date(request.body.start_date) : undefined,
         };
+
+        // Double-check to prevent unassigned tasks
+        if (!taskData.assigned_to || taskData.assigned_to.length === 0) {
+          throw new ValidationError('Tasks must have at least one assignee');
+        }
+
+        // Double-check to prevent tasks without channels
+        if (!taskData.channel_id) {
+          throw new ValidationError('Tasks must belong to a channel');
+        }
 
         const task = await taskService.createTask(taskData);
 
@@ -1412,17 +1430,32 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
           }
         }
         
+        // Ensure channel task always has assignees - prevents unassigned tasks
+        const assignedTo = request.body.assigned_to && request.body.assigned_to.length > 0
+          ? request.body.assigned_to
+          : [request.user!.userId];
+
         const taskData = {
           ...request.body,
           channel_id: channelId,
           created_by: request.user!.userId,
-          assigned_to: request.body.assigned_to || [request.user!.userId],
-          owned_by: request.body.owned_by || request.user!.userId,
+          assigned_to: assignedTo,
+          owned_by: request.body.owned_by || assignedTo[0],
           tags: request.body.tags || [],
           labels: request.body.labels || {},
           due_date: request.body.due_date ? new Date(request.body.due_date) : undefined,
           start_date: request.body.start_date ? new Date(request.body.start_date) : undefined,
         };
+
+        // Double-check to prevent unassigned tasks
+        if (!taskData.assigned_to || taskData.assigned_to.length === 0) {
+          throw new ValidationError('Tasks must have at least one assignee');
+        }
+
+        // Double-check to prevent tasks without channels (should be impossible for this endpoint)
+        if (!taskData.channel_id) {
+          throw new ValidationError('Tasks must belong to a channel');
+        }
 
         const task = await taskService.createTask(taskData);
 
