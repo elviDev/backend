@@ -239,6 +239,133 @@ class ChannelRepository extends BaseRepository_1.default {
         return result.rows[0] || null;
     }
     /**
+     * Get channel with detailed member information and tasks with assignee details
+     */
+    async findWithFullDetails(channelId, client) {
+        const sql = `
+      SELECT 
+        c.*,
+        cat.name as category_name,
+        owner.name as owner_name,
+        ARRAY(
+          SELECT json_build_object(
+            'id', u.id,
+            'name', u.name,
+            'email', u.email,
+            'role', u.role,
+            'avatar_url', u.avatar_url
+          )
+          FROM users u 
+          WHERE u.id = ANY(c.members) 
+          AND u.deleted_at IS NULL
+          ORDER BY u.name
+        ) as member_details,
+        ARRAY(
+          SELECT json_build_object(
+            'id', t.id,
+            'title', t.title,
+            'status', t.status,
+            'priority', t.priority,
+            'assignee_details', ARRAY(
+              SELECT json_build_object(
+                'id', u.id,
+                'name', u.name,
+                'email', u.email,
+                'avatar_url', u.avatar_url,
+                'role', u.role,
+                'phone', u.phone
+              )
+              FROM users u 
+              WHERE u.id = ANY(t.assigned_to) 
+              AND u.deleted_at IS NULL
+              ORDER BY u.name
+            )
+          )
+          FROM tasks t 
+          WHERE t.channel_id = c.id 
+          AND t.deleted_at IS NULL
+          ORDER BY t.created_at DESC
+          LIMIT 10
+        ) as tasks
+      FROM channels c
+      LEFT JOIN categories cat ON c.category_id = cat.id
+      LEFT JOIN users owner ON c.owned_by = owner.id
+      WHERE c.id = $1 AND c.deleted_at IS NULL
+    `;
+        const result = await this.executeRawQuery(sql, [channelId], client);
+        return result.rows[0] || null;
+    }
+    /**
+     * Find channels accessible by user with full details (members and tasks)
+     */
+    async findAccessibleByUserWithDetails(userId, userRole, client) {
+        const sql = `
+      SELECT 
+        c.*,
+        cat.name as category_name,
+        owner.name as owner_name,
+        ARRAY(
+          SELECT json_build_object(
+            'id', u.id,
+            'name', u.name,
+            'email', u.email,
+            'role', u.role,
+            'avatar_url', u.avatar_url
+          )
+          FROM users u 
+          WHERE u.id = ANY(c.members) 
+          AND u.deleted_at IS NULL
+          ORDER BY u.name
+        ) as member_details,
+        ARRAY(
+          SELECT json_build_object(
+            'id', t.id,
+            'title', t.title,
+            'status', t.status,
+            'priority', t.priority,
+            'assignee_details', ARRAY(
+              SELECT json_build_object(
+                'id', u.id,
+                'name', u.name,
+                'email', u.email,
+                'avatar_url', u.avatar_url,
+                'role', u.role,
+                'phone', u.phone
+              )
+              FROM users u 
+              WHERE u.id = ANY(t.assigned_to) 
+              AND u.deleted_at IS NULL
+              ORDER BY u.name
+            )
+          )
+          FROM tasks t 
+          WHERE t.channel_id = c.id 
+          AND t.deleted_at IS NULL
+          ORDER BY t.created_at DESC
+          LIMIT 5
+        ) as tasks
+      FROM channels c
+      LEFT JOIN categories cat ON c.category_id = cat.id
+      LEFT JOIN users owner ON c.owned_by = owner.id
+      WHERE c.deleted_at IS NULL
+      AND (
+        -- Public channels
+        c.privacy_level = 'public' 
+        -- User is a member
+        OR $1 = ANY(c.members)
+        -- CEO can access all channels
+        OR $2 = 'ceo'
+        -- Restricted channels with role access
+        OR (c.privacy_level = 'restricted' AND $2 = ANY(c.auto_join_roles))
+      )
+      ORDER BY 
+        CASE WHEN $1 = ANY(c.members) THEN 1 ELSE 2 END,
+        c.last_activity_at DESC
+    `;
+        const result = await this.executeRawQuery(sql, [userId, userRole], client);
+        return result.rows;
+    }
+    /**
      * Search channels by name or description
      */
     async searchChannels(searchTerm, userId, userRole, limit = 20, offset = 0, client) {

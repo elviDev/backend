@@ -442,6 +442,29 @@ class ReactionRepository extends BaseRepository<MessageReaction> {
   }
 
   /**
+   * Find a specific reaction by message, user, and emoji
+   */
+  async findReaction(
+    messageId: string,
+    userId: string,
+    emoji: string,
+    client?: DatabaseClient
+  ): Promise<MessageReaction | null> {
+    const sql = `
+      SELECT * FROM message_reactions 
+      WHERE message_id = $1 AND user_id = $2 AND emoji = $3 AND deleted_at IS NULL
+    `;
+
+    const result = await this.executeRawQuery<MessageReaction>(
+      sql,
+      [messageId, userId, emoji],
+      client
+    );
+
+    return result.rows[0] || null;
+  }
+
+  /**
    * Get recent reactions across all messages for activity feed
    */
   async getRecentReactions(

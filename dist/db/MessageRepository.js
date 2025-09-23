@@ -25,6 +25,7 @@ class MessageRepository extends BaseRepository_1.default {
             is_edited: false,
             is_pinned: false,
             is_announcement: false,
+            is_thread_root: false,
             ai_generated: messageData.ai_generated || false,
         };
         const message = await this.create(messageToCreate, client);
@@ -34,6 +35,8 @@ class MessageRepository extends BaseRepository_1.default {
             userId: message.user_id,
             messageType: message.message_type,
             contentLength: message.content.length,
+            threadRootId: message.thread_root_id,
+            replyToId: message.reply_to_id,
         }, 'Message created successfully');
         return message;
     }
@@ -45,15 +48,15 @@ class MessageRepository extends BaseRepository_1.default {
         let params = [channelId];
         let paramIndex = 2;
         // Add filters
-        if (filters?.threadRoot) {
-            whereConditions.push(`m.thread_root = $${paramIndex}`);
-            params.push(filters.threadRoot);
+        if (filters?.threadRootId) {
+            whereConditions.push(`m.thread_root_id = $${paramIndex}`);
+            params.push(filters.threadRootId);
             paramIndex++;
         }
         else if (!filters?.includeThreadReplies) {
-            // For main channel messages, exclude thread replies (messages with thread_root)
+            // For main channel messages, exclude thread replies (messages with thread_root_id)
             // unless explicitly requested to include them
-            whereConditions.push(`m.thread_root IS NULL`);
+            whereConditions.push(`m.thread_root_id IS NULL`);
         }
         if (filters?.messageType) {
             whereConditions.push(`m.message_type = $${paramIndex}`);
@@ -73,26 +76,110 @@ class MessageRepository extends BaseRepository_1.default {
         const sql = `
       SELECT 
         m.*,
-        u.name as user_name,
-        u.email as user_email,
-        u.avatar_url as user_avatar,
-        u.role as user_role,
+        json_build_object(
+          'id', u.id,
+          'name', u.name,
+          'email', u.email,
+          'avatar_url', u.avatar_url,
+          'role', u.role,
+          'phone', u.phone
+        ) as user_details,
+        -- Reply to message info
+        CASE 
+          WHEN m.reply_to_id IS NOT NULL THEN
+            json_build_object(
+              'id', reply_msg.id,
+              'content', reply_msg.content,
+              'user', json_build_object(
+                'id', reply_user.id,
+                'name', reply_user.name,
+                'avatar_url', reply_user.avatar_url
+              )
+            )
+          ELSE NULL
+        END as reply_to,
+        -- Thread info for thread root messages
+        CASE 
+          WHEN m.is_thread_root = true THEN
+            json_build_object(
+              'reply_count', COALESCE(ts.reply_count, 0),
+              'participant_count', COALESCE(ts.participant_count, 0),
+              'last_reply_at', ts.last_reply_at,
+              'last_reply_by', CASE 
+                WHEN ts.last_reply_by_id IS NOT NULL THEN
+                  json_build_object(
+                    'id', last_reply_user.id,
+                    'name', last_reply_user.name,
+                    'avatar_url', last_reply_user.avatar_url
+                  )
+                ELSE NULL
+              END,
+              'participants', COALESCE(participant_details.participants, '[]'::json)
+            )
+          ELSE NULL
+        END as thread_info,
+        -- Message reactions
+        COALESCE(reactions.reactions, '[]'::json) as reactions,
         COALESCE(thread_stats.reply_count, 0) as reply_count,
         thread_stats.last_reply_timestamp,
         deleter.name as deleted_by_name
       FROM ${this.tableName} m
       LEFT JOIN users u ON m.user_id = u.id
       LEFT JOIN users deleter ON m.deleted_by = deleter.id
+      -- Reply to message join
+      LEFT JOIN messages reply_msg ON m.reply_to_id = reply_msg.id
+      LEFT JOIN users reply_user ON reply_msg.user_id = reply_user.id
+      -- Thread statistics join
+      LEFT JOIN thread_statistics ts ON m.id = ts.thread_root_id
+      LEFT JOIN users last_reply_user ON ts.last_reply_by_id = last_reply_user.id
+      -- Thread participants
+      LEFT JOIN LATERAL (
+        SELECT json_agg(
+          json_build_object(
+            'id', pu.id,
+            'name', pu.name,
+            'avatar_url', pu.avatar_url
+          )
+        ) as participants
+        FROM users pu
+        WHERE pu.id = ANY(
+          SELECT jsonb_array_elements_text(ts.participants)::uuid
+        )
+      ) participant_details ON m.is_thread_root = true
+      -- Message reactions
+      LEFT JOIN LATERAL (
+        SELECT json_agg(
+          json_build_object(
+            'emoji', emoji,
+            'count', count,
+            'users', users
+          )
+        ) as reactions
+        FROM (
+          SELECT 
+            mr.emoji,
+            COUNT(*) as count,
+            json_agg(
+              json_build_object(
+                'id', ru.id,
+                'name', ru.name,
+                'avatar_url', ru.avatar_url
+              )
+            ) as users
+          FROM message_reactions mr
+          JOIN users ru ON mr.user_id = ru.id
+          WHERE mr.message_id = m.id
+          GROUP BY mr.emoji
+        ) grouped_reactions
+      ) reactions ON true
+      -- Legacy thread stats for backward compatibility
       LEFT JOIN (
         SELECT 
-          thread_root,
-          COUNT(*) as reply_count,
-          MAX(created_at) as last_reply_timestamp
-        FROM ${this.tableName}
-        WHERE thread_root IS NOT NULL 
-          AND deleted_at IS NULL
-        GROUP BY thread_root
-      ) thread_stats ON m.id = thread_stats.thread_root
+          thread_root_id,
+          reply_count,
+          last_reply_at as last_reply_timestamp
+        FROM thread_statistics
+      ) thread_stats ON m.id = thread_stats.thread_root_id
       WHERE ${whereConditions.join(' AND ')}
       ORDER BY m.created_at DESC
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
@@ -109,15 +196,15 @@ class MessageRepository extends BaseRepository_1.default {
         let params = [channelId];
         let paramIndex = 2;
         // Add filters
-        if (filters?.threadRoot) {
-            whereConditions.push(`thread_root = $${paramIndex}`);
-            params.push(filters.threadRoot);
+        if (filters?.threadRootId) {
+            whereConditions.push(`thread_root_id = $${paramIndex}`);
+            params.push(filters.threadRootId);
             paramIndex++;
         }
         else if (!filters?.includeThreadReplies) {
-            // For main channel messages, exclude thread replies (messages with thread_root)
+            // For main channel messages, exclude thread replies (messages with thread_root_id)
             // unless explicitly requested to include them
-            whereConditions.push(`thread_root IS NULL`);
+            whereConditions.push(`thread_root_id IS NULL`);
         }
         if (filters?.messageType) {
             whereConditions.push(`message_type = $${paramIndex}`);
@@ -143,16 +230,56 @@ class MessageRepository extends BaseRepository_1.default {
         return parseInt(result.rows[0]?.count || '0', 10);
     }
     /**
+     * Find message by ID with user details
+     */
+    async findByIdWithUser(messageId, client) {
+        const sql = `
+      SELECT 
+        m.*,
+        json_build_object(
+          'id', u.id,
+          'name', u.name,
+          'email', u.email,
+          'avatar_url', u.avatar_url,
+          'role', u.role,
+          'phone', u.phone
+        ) as user_details,
+        COALESCE(thread_stats.reply_count, 0) as reply_count,
+        thread_stats.last_reply_timestamp,
+        deleter.name as deleted_by_name
+      FROM ${this.tableName} m
+      LEFT JOIN users u ON m.user_id = u.id
+      LEFT JOIN users deleter ON m.deleted_by = deleter.id
+      LEFT JOIN (
+        SELECT 
+          thread_root_id,
+          COUNT(*) as reply_count,
+          MAX(created_at) as last_reply_timestamp
+        FROM ${this.tableName}
+        WHERE thread_root_id IS NOT NULL 
+          AND deleted_at IS NULL
+        GROUP BY thread_root_id
+      ) thread_stats ON m.id = thread_stats.thread_root_id
+      WHERE m.id = $1 AND m.deleted_at IS NULL
+    `;
+        const result = await this.executeRawQuery(sql, [messageId], client);
+        return result.rows[0] || null;
+    }
+    /**
      * Search messages in channel
      */
     async searchMessages(channelId, searchTerm, limit = 50, offset = 0, client) {
         const sql = `
       SELECT 
         m.*,
-        u.name as user_name,
-        u.email as user_email,
-        u.avatar_url as user_avatar,
-        u.role as user_role,
+        json_build_object(
+          'id', u.id,
+          'name', u.name,
+          'email', u.email,
+          'avatar_url', u.avatar_url,
+          'role', u.role,
+          'phone', u.phone
+        ) as user_details,
         deleter.name as deleted_by_name
       FROM ${this.tableName} m
       LEFT JOIN users u ON m.user_id = u.id
@@ -345,7 +472,7 @@ class MessageRepository extends BaseRepository_1.default {
       FROM ${this.tableName} m
       LEFT JOIN users u ON m.user_id = u.id
       LEFT JOIN users deleter ON m.deleted_by = deleter.id
-      WHERE (m.id = $1 OR m.thread_root = $1)
+      WHERE (m.id = $1 OR m.thread_root_id = $1)
         AND m.deleted_at IS NULL
       ORDER BY m.created_at ASC
       LIMIT $2 OFFSET $3

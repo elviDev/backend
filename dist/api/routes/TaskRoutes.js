@@ -156,16 +156,6 @@ class TaskService {
     }
 }
 __decorate([
-    (0, cache_decorators_1.Cacheable)({
-        ttl: 900, // 15 minutes
-        namespace: 'tasks',
-        keyGenerator: (taskId) => cache_decorators_1.CacheKeyUtils.taskKey(taskId),
-    }),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
-    __metadata("design:returntype", Promise)
-], TaskService.prototype, "getTaskById", null);
-__decorate([
     (0, cache_decorators_1.CacheEvict)({
         keys: (taskId) => [cache_decorators_1.CacheKeyUtils.taskKey(taskId)],
         namespace: 'tasks',
@@ -1163,7 +1153,7 @@ const registerTaskRoutes = async (fastify) => {
                 priority,
                 assignedTo: assigned_to ? [assigned_to] : undefined,
             };
-            const tasks = await index_1.taskRepository.findWithFilters(filters, Math.min(limit, 100), offset);
+            const tasks = await index_1.taskRepository.findWithFiltersAndDetails(filters, Math.min(limit, 100), offset);
             const total = tasks.length; // Simplified - in production, implement proper count query
             logger_1.loggers.api.info({
                 userId: request.user?.userId,

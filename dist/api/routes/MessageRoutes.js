@@ -32,8 +32,8 @@ const SendMessageSchema = typebox_1.Type.Object({
         typebox_1.Type.Literal('file'),
         typebox_1.Type.Literal('system'),
     ])),
-    reply_to: typebox_1.Type.Optional(validation_1.UUIDSchema),
-    thread_root: typebox_1.Type.Optional(validation_1.UUIDSchema),
+    reply_to_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
+    thread_root_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
     mentions: typebox_1.Type.Optional(typebox_1.Type.Array(validation_1.UUIDSchema)),
     attachments: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.Object({
         file_id: validation_1.UUIDSchema,
@@ -56,19 +56,43 @@ const MessageResponseSchema = typebox_1.Type.Object({
     channel_id: validation_1.UUIDSchema,
     task_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
     user_id: validation_1.UUIDSchema,
-    user_name: typebox_1.Type.String(),
-    user_avatar: typebox_1.Type.Optional(typebox_1.Type.String()),
+    user_details: typebox_1.Type.Object({
+        id: validation_1.UUIDSchema,
+        name: typebox_1.Type.String(),
+        email: typebox_1.Type.String(),
+        avatar_url: typebox_1.Type.Optional(typebox_1.Type.String()),
+        role: typebox_1.Type.String(),
+        phone: typebox_1.Type.Optional(typebox_1.Type.String()),
+    }),
     content: typebox_1.Type.String(),
     message_type: typebox_1.Type.String(),
     voice_data: typebox_1.Type.Optional(typebox_1.Type.Any()),
     transcription: typebox_1.Type.Optional(typebox_1.Type.String()),
     attachments: typebox_1.Type.Array(typebox_1.Type.Any()),
-    reply_to: typebox_1.Type.Optional(validation_1.UUIDSchema),
-    thread_root: typebox_1.Type.Optional(validation_1.UUIDSchema),
+    reply_to_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
+    thread_root_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
     is_edited: typebox_1.Type.Boolean(),
     is_pinned: typebox_1.Type.Boolean(),
     is_announcement: typebox_1.Type.Boolean(),
-    reactions: typebox_1.Type.Record(typebox_1.Type.String(), typebox_1.Type.Any()),
+    reactions: typebox_1.Type.Array(typebox_1.Type.Object({
+        emoji: typebox_1.Type.String(),
+        count: typebox_1.Type.Integer(),
+        users: typebox_1.Type.Array(typebox_1.Type.Object({
+            id: validation_1.UUIDSchema,
+            name: typebox_1.Type.String(),
+            avatar_url: typebox_1.Type.Optional(typebox_1.Type.String()),
+        })),
+    })),
+    thread_info: typebox_1.Type.Optional(typebox_1.Type.Object({
+        reply_count: typebox_1.Type.Integer(),
+        participant_count: typebox_1.Type.Integer(),
+        last_reply_at: typebox_1.Type.Optional(typebox_1.Type.String({ format: 'date-time' })),
+        last_reply_by_details: typebox_1.Type.Optional(typebox_1.Type.Object({
+            id: validation_1.UUIDSchema,
+            name: typebox_1.Type.String(),
+            avatar_url: typebox_1.Type.Optional(typebox_1.Type.String()),
+        })),
+    })),
     mentions: typebox_1.Type.Array(validation_1.UUIDSchema),
     ai_generated: typebox_1.Type.Boolean(),
     ai_context: typebox_1.Type.Optional(typebox_1.Type.Any()),
@@ -142,7 +166,7 @@ const registerMessageRoutes = async (fastify) => {
             querystring: typebox_1.Type.Intersect([
                 validation_1.PaginationSchema,
                 typebox_1.Type.Object({
-                    thread_root: typebox_1.Type.Optional(validation_1.UUIDSchema),
+                    thread_root_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
                     search: typebox_1.Type.Optional(typebox_1.Type.String({ maxLength: 200 })),
                     message_type: typebox_1.Type.Optional(typebox_1.Type.String()),
                     before: typebox_1.Type.Optional(typebox_1.Type.String({ format: 'date-time' })),
@@ -170,7 +194,7 @@ const registerMessageRoutes = async (fastify) => {
             // Build filters
             const filters = {
                 channelId,
-                threadRoot: thread_root,
+                threadRootId: thread_root,
                 messageType: message_type,
                 before: before ? new Date(before) : undefined,
                 after: after ? new Date(after) : undefined,
@@ -265,15 +289,15 @@ const registerMessageRoutes = async (fastify) => {
             // Update channel activity
             await index_1.channelRepository.updateActivity(channelId);
             // Determine if this is a thread message
-            const isThreadReply = message.reply_to && message.thread_root;
+            const isThreadReply = message.reply_to_id && message.thread_root_id;
             // Broadcast message to channel members with thread context
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_sent', {
                 type: 'message_sent',
                 channelId,
                 messageId: message.id,
                 isThreadReply,
-                threadRoot: message.thread_root,
-                replyTo: message.reply_to,
+                threadRootId: message.thread_root_id,
+                replyToId: message.reply_to_id,
                 message: {
                     id: message.id,
                     channel_id: message.channel_id,
@@ -287,8 +311,8 @@ const registerMessageRoutes = async (fastify) => {
                     voice_data: message.voice_data,
                     transcription: message.transcription,
                     attachments: message.attachments,
-                    reply_to: message.reply_to,
-                    thread_root: message.thread_root,
+                    reply_to_id: message.reply_to_id,
+                    thread_root_id: message.thread_root_id,
                     is_edited: message.is_edited,
                     is_pinned: message.is_pinned,
                     is_announcement: message.is_announcement,
@@ -313,8 +337,8 @@ const registerMessageRoutes = async (fastify) => {
                 await utils_1.WebSocketUtils.sendToChannel(channelId, 'thread_reply_sent', {
                     type: 'thread_reply_sent',
                     channelId,
-                    threadRoot: message.thread_root,
-                    parentMessageId: message.reply_to,
+                    threadRootId: message.thread_root_id,
+                    parentMessageId: message.reply_to_id,
                     messageId: message.id,
                     message: {
                         id: message.id,
@@ -329,8 +353,8 @@ const registerMessageRoutes = async (fastify) => {
                         voice_data: message.voice_data,
                         transcription: message.transcription,
                         attachments: message.attachments,
-                        reply_to: message.reply_to,
-                        thread_root: message.thread_root,
+                        reply_to_id: message.reply_to_id,
+                        thread_root_id: message.thread_root_id,
                         is_edited: message.is_edited,
                         is_pinned: message.is_pinned,
                         is_announcement: message.is_announcement,
@@ -591,63 +615,6 @@ const registerMessageRoutes = async (fastify) => {
         }
     });
     /**
-     * POST /channels/:channelId/messages/:messageId/reactions - Add reaction
-     */
-    fastify.post('/channels/:channelId/messages/:messageId/reactions', {
-        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess],
-        schema: {
-            params: typebox_1.Type.Object({
-                channelId: validation_1.UUIDSchema,
-                messageId: validation_1.UUIDSchema,
-            }),
-            body: typebox_1.Type.Object({
-                emoji: typebox_1.Type.String({ minLength: 1, maxLength: 10 }),
-            }),
-            response: {
-                200: validation_1.SuccessResponseSchema,
-            },
-        },
-    }, async (request, reply) => {
-        try {
-            const { channelId, messageId } = request.params;
-            const { emoji } = request.body;
-            const success = await index_1.messageRepository.addReaction(messageId, request.user.userId, emoji);
-            if (!success) {
-                throw new errors_1.NotFoundError('Message not found');
-            }
-            // Broadcast reaction
-            await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_reaction_added', {
-                type: 'message_reaction_added',
-                channelId,
-                messageId,
-                emoji,
-                userId: request.user.userId,
-                userName: request.user.name,
-                userRole: request.user.role,
-                timestamp: new Date().toISOString(),
-            });
-            reply.send({
-                success: true,
-                message: 'Reaction added successfully',
-                timestamp: new Date().toISOString(),
-            });
-        }
-        catch (error) {
-            logger_1.loggers.api.error({ error }, 'Failed to add reaction');
-            if (error instanceof errors_1.NotFoundError) {
-                reply.code(404).send((0, errors_1.formatErrorResponse)(error));
-            }
-            else {
-                reply.code(500).send({
-                    error: {
-                        message: 'Failed to add reaction',
-                        code: 'SERVER_ERROR',
-                    },
-                });
-            }
-        }
-    });
-    /**
      * GET /channels/:channelId/messages/:messageId/thread - Get thread messages
      */
     fastify.get('/channels/:channelId/messages/:messageId/thread', {
@@ -679,23 +646,20 @@ const registerMessageRoutes = async (fastify) => {
         try {
             const { channelId, messageId } = request.params;
             const { limit = 50, offset = 0 } = request.query;
-            // Get the parent message
-            const parentMessage = await index_1.messageRepository.findById(messageId);
+            // Get the parent message with user details
+            const parentMessage = await index_1.messageRepository.findByIdWithUser(messageId);
             if (!parentMessage) {
                 throw new errors_1.NotFoundError('Message not found');
             }
             // Get thread root - if this message is itself a reply, get its root
-            const threadRoot = parentMessage.thread_root || messageId;
-            // Get all replies to this thread
-            const replies = await index_1.messageRepository.findChannelMessages(channelId, { threadRoot }, Math.min(limit, 100), offset);
-            // Filter out the parent message from replies if it's included
-            const threadReplies = replies.filter(msg => msg.id !== threadRoot);
-            const total = await index_1.messageRepository.getChannelMessageCount(channelId, { threadRoot });
+            const threadRootId = parentMessage.thread_root_id || messageId;
+            // Use ThreadRepository for better thread management
+            const { replies: threadReplies, total } = await index_1.threadRepository.getThreadReplies(threadRootId, Math.min(limit, 100), offset);
             logger_1.loggers.api.info({
                 userId: request.user?.userId,
                 channelId,
                 messageId,
-                threadRoot,
+                threadRootId,
                 repliesCount: threadReplies.length,
             }, 'Thread messages retrieved');
             reply.send({
@@ -704,10 +668,10 @@ const registerMessageRoutes = async (fastify) => {
                     parentMessage,
                     replies: threadReplies,
                     pagination: {
-                        total: total - 1, // Exclude parent message from count
+                        total,
                         limit,
                         offset,
-                        hasMore: offset + limit < total - 1,
+                        hasMore: offset + limit < total,
                     },
                 },
                 timestamp: new Date().toISOString(),
@@ -818,6 +782,804 @@ const registerMessageRoutes = async (fastify) => {
                 reply.code(500).send({
                     error: {
                         message: 'Failed to update pin status',
+                        code: 'SERVER_ERROR',
+                    },
+                });
+            }
+        }
+    });
+    // ============================================================================
+    // THREAD REPLIES ENDPOINTS
+    // ============================================================================
+    /**
+     * POST /channels/:channelId/messages/:messageId/thread - Create thread reply
+     */
+    fastify.post('/channels/:channelId/messages/:messageId/thread', {
+        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess],
+        schema: {
+            params: typebox_1.Type.Object({
+                channelId: validation_1.UUIDSchema,
+                messageId: validation_1.UUIDSchema,
+            }),
+            body: SendMessageSchema,
+            response: {
+                201: typebox_1.Type.Object({
+                    success: typebox_1.Type.Boolean(),
+                    data: MessageResponseSchema,
+                    timestamp: typebox_1.Type.String({ format: 'date-time' }),
+                }),
+            },
+        },
+    }, async (request, reply) => {
+        try {
+            const { channelId, messageId } = request.params;
+            // Verify parent message exists
+            const parentMessage = await index_1.messageRepository.findById(messageId);
+            if (!parentMessage) {
+                throw new errors_1.NotFoundError('Parent message not found');
+            }
+            // Create thread reply
+            const replyData = {
+                ...request.body,
+                channel_id: channelId,
+                user_id: request.user.userId,
+                reply_to_id: messageId,
+                thread_root_id: parentMessage.thread_root_id || messageId, // Use existing root or set parent as root
+                message_type: request.body.message_type || 'text',
+                attachments: request.body.attachments || [],
+                mentions: request.body.mentions || [],
+                metadata: request.body.metadata || {},
+                ai_generated: false,
+            };
+            const reply_message = await messageService.createMessage(replyData);
+            // Update channel activity
+            await index_1.channelRepository.updateActivity(channelId);
+            // Broadcast thread reply
+            await utils_1.WebSocketUtils.sendToChannel(channelId, 'thread_reply_sent', {
+                type: 'thread_reply_sent',
+                channelId,
+                threadRootId: reply_message.thread_root_id,
+                parentMessageId: messageId,
+                messageId: reply_message.id,
+                message: reply_message,
+                userId: request.user.userId,
+                userName: request.user.name,
+                userRole: request.user.role,
+                timestamp: new Date().toISOString(),
+            });
+            logger_1.loggers.api.info({
+                userId: request.user?.userId,
+                channelId,
+                messageId: reply_message.id,
+                threadRootId: reply_message.thread_root_id,
+                parentMessageId: messageId,
+            }, 'Thread reply created successfully');
+            reply.code(201).send({
+                success: true,
+                data: reply_message,
+                timestamp: new Date().toISOString(),
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                ...(request.user && {
+                    user: {
+                        id: request.user.id,
+                        email: request.user.email,
+                        role: request.user.role,
+                    },
+                }),
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers,
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to create thread reply');
+            if (error instanceof errors_1.ValidationError || error instanceof errors_1.NotFoundError) {
+                reply.code(error.statusCode).send((0, errors_1.formatErrorResponse)(error));
+            }
+            else {
+                reply.code(500).send({
+                    error: {
+                        message: 'Failed to create thread reply',
+                        code: 'SERVER_ERROR',
+                    },
+                });
+            }
+        }
+    });
+    /**
+     * DELETE /channels/:channelId/messages/:messageId/pin - Unpin message
+     */
+    fastify.delete('/channels/:channelId/messages/:messageId/pin', {
+        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess],
+        schema: {
+            params: typebox_1.Type.Object({
+                channelId: validation_1.UUIDSchema,
+                messageId: validation_1.UUIDSchema,
+            }),
+            response: {
+                200: validation_1.SuccessResponseSchema,
+            },
+        },
+    }, async (request, reply) => {
+        try {
+            const { channelId, messageId } = request.params;
+            // Only channel admins/owners and CEO can unpin messages
+            if (request.user.role !== 'ceo') {
+                throw new errors_1.AuthorizationError('Only channel administrators can unpin messages');
+            }
+            const success = await index_1.messageRepository.updateMessage(messageId, {
+                is_pinned: false,
+            });
+            if (!success) {
+                throw new errors_1.NotFoundError('Message not found');
+            }
+            // Broadcast unpin status change
+            await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_unpinned', {
+                type: 'message_unpinned',
+                channelId,
+                messageId,
+                pinned: false,
+                userId: request.user.userId,
+                userName: request.user.name,
+                userRole: request.user.role,
+                timestamp: new Date().toISOString(),
+            });
+            logger_1.loggers.api.info({
+                userId: request.user?.userId,
+                channelId,
+                messageId,
+                pinned: false,
+            }, 'Message unpinned successfully');
+            reply.send({
+                success: true,
+                message: 'Message unpinned successfully',
+                timestamp: new Date().toISOString(),
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                ...(request.user && {
+                    user: {
+                        id: request.user.id,
+                        email: request.user.email,
+                        role: request.user.role,
+                    },
+                }),
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers,
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to unpin message');
+            if (error instanceof errors_1.NotFoundError || error instanceof errors_1.AuthorizationError) {
+                reply.code(error.statusCode).send((0, errors_1.formatErrorResponse)(error));
+            }
+            else {
+                reply.code(500).send({
+                    error: {
+                        message: 'Failed to unpin message',
+                        code: 'SERVER_ERROR',
+                    },
+                });
+            }
+        }
+    });
+    // ============================================================================
+    // DIRECT REPLIES ENDPOINTS  
+    // ============================================================================
+    /**
+     * GET /channels/:channelId/messages/:messageId/replies - Get direct replies
+     */
+    fastify.get('/channels/:channelId/messages/:messageId/replies', {
+        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess, middleware_1.apiRateLimit],
+        schema: {
+            params: typebox_1.Type.Object({
+                channelId: validation_1.UUIDSchema,
+                messageId: validation_1.UUIDSchema,
+            }),
+            querystring: validation_1.PaginationSchema,
+            response: {
+                200: typebox_1.Type.Object({
+                    success: typebox_1.Type.Boolean(),
+                    data: typebox_1.Type.Array(MessageResponseSchema),
+                    pagination: typebox_1.Type.Object({
+                        total: typebox_1.Type.Integer(),
+                        limit: typebox_1.Type.Integer(),
+                        offset: typebox_1.Type.Integer(),
+                        hasMore: typebox_1.Type.Boolean(),
+                    }),
+                    timestamp: typebox_1.Type.String({ format: 'date-time' }),
+                }),
+            },
+        },
+    }, async (request, reply) => {
+        try {
+            const { channelId, messageId } = request.params;
+            const { limit = 50, offset = 0 } = request.query;
+            // Get direct replies (not threaded)
+            const replies = await index_1.messageRepository.findChannelMessages(channelId, {
+                includeThreadReplies: false,
+                // Add filter for direct replies to this message
+            }, Math.min(limit, 100), offset);
+            // Filter replies that are direct replies to this message
+            const directReplies = replies.filter(msg => msg.reply_to_id === messageId && !msg.thread_root_id);
+            logger_1.loggers.api.info({
+                userId: request.user?.userId,
+                channelId,
+                messageId,
+                repliesCount: directReplies.length,
+            }, 'Direct replies retrieved');
+            reply.send({
+                success: true,
+                data: directReplies,
+                pagination: {
+                    total: directReplies.length,
+                    limit,
+                    offset,
+                    hasMore: false, // For simplicity, not implementing complex pagination for direct replies
+                },
+                timestamp: new Date().toISOString(),
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                ...(request.user && {
+                    user: {
+                        id: request.user.id,
+                        email: request.user.email,
+                        role: request.user.role,
+                    },
+                }),
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers,
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to retrieve direct replies');
+            reply.code(500).send({
+                error: {
+                    message: 'Failed to retrieve direct replies',
+                    code: 'SERVER_ERROR',
+                },
+            });
+        }
+    });
+    /**
+     * POST /channels/:channelId/messages/:messageId/replies - Create direct reply
+     */
+    fastify.post('/channels/:channelId/messages/:messageId/replies', {
+        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess],
+        schema: {
+            params: typebox_1.Type.Object({
+                channelId: validation_1.UUIDSchema,
+                messageId: validation_1.UUIDSchema,
+            }),
+            body: SendMessageSchema,
+            response: {
+                201: typebox_1.Type.Object({
+                    success: typebox_1.Type.Boolean(),
+                    data: MessageResponseSchema,
+                    timestamp: typebox_1.Type.String({ format: 'date-time' }),
+                }),
+            },
+        },
+    }, async (request, reply) => {
+        try {
+            const { channelId, messageId } = request.params;
+            // Verify parent message exists
+            const parentMessage = await index_1.messageRepository.findById(messageId);
+            if (!parentMessage) {
+                throw new errors_1.NotFoundError('Parent message not found');
+            }
+            // Create direct reply (no thread_root_id)
+            const replyData = {
+                ...request.body,
+                channel_id: channelId,
+                user_id: request.user.userId,
+                reply_to_id: messageId,
+                // No thread_root_id for direct replies
+                message_type: request.body.message_type || 'text',
+                attachments: request.body.attachments || [],
+                mentions: request.body.mentions || [],
+                metadata: request.body.metadata || {},
+                ai_generated: false,
+            };
+            const replyMessage = await messageService.createMessage(replyData);
+            // Update channel activity
+            await index_1.channelRepository.updateActivity(channelId);
+            // Broadcast direct reply
+            await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_reply_sent', {
+                type: 'message_reply_sent',
+                channelId,
+                parentMessageId: messageId,
+                messageId: replyMessage.id,
+                message: replyMessage,
+                userId: request.user.userId,
+                userName: request.user.name,
+                userRole: request.user.role,
+                timestamp: new Date().toISOString(),
+            });
+            logger_1.loggers.api.info({
+                userId: request.user?.userId,
+                channelId,
+                messageId: replyMessage.id,
+                parentMessageId: messageId,
+            }, 'Direct reply created successfully');
+            reply.code(201).send({
+                success: true,
+                data: replyMessage,
+                timestamp: new Date().toISOString(),
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                ...(request.user && {
+                    user: {
+                        id: request.user.id,
+                        email: request.user.email,
+                        role: request.user.role,
+                    },
+                }),
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers,
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to create direct reply');
+            if (error instanceof errors_1.ValidationError || error instanceof errors_1.NotFoundError) {
+                reply.code(error.statusCode).send((0, errors_1.formatErrorResponse)(error));
+            }
+            else {
+                reply.code(500).send({
+                    error: {
+                        message: 'Failed to create direct reply',
+                        code: 'SERVER_ERROR',
+                    },
+                });
+            }
+        }
+    });
+    /**
+     * PUT /channels/:channelId/messages/:messageId/replies/:replyId - Update reply
+     */
+    fastify.put('/channels/:channelId/messages/:messageId/replies/:replyId', {
+        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess],
+        schema: {
+            params: typebox_1.Type.Object({
+                channelId: validation_1.UUIDSchema,
+                messageId: validation_1.UUIDSchema,
+                replyId: validation_1.UUIDSchema,
+            }),
+            body: UpdateMessageSchema,
+            response: {
+                200: typebox_1.Type.Object({
+                    success: typebox_1.Type.Boolean(),
+                    data: MessageResponseSchema,
+                    timestamp: typebox_1.Type.String({ format: 'date-time' }),
+                }),
+            },
+        },
+    }, async (request, reply) => {
+        try {
+            const { channelId, messageId, replyId } = request.params;
+            const { content } = request.body;
+            // Check if the reply exists and is actually a reply to the specified message
+            const existingReply = await index_1.messageRepository.findById(replyId);
+            if (!existingReply) {
+                throw new errors_1.NotFoundError('Reply not found');
+            }
+            if (existingReply.reply_to_id !== messageId) {
+                throw new errors_1.ValidationError('Message is not a reply to the specified parent message', [
+                    { field: 'replyId', message: 'Not a reply to the specified parent message' }
+                ]);
+            }
+            // Check if user can edit this reply
+            if (existingReply.user_id !== request.user.userId && request.user.role !== 'ceo') {
+                throw new errors_1.AuthorizationError('You can only edit your own replies');
+            }
+            // Check if reply is too old to edit (24 hours)
+            const replyAge = Date.now() - new Date(existingReply.created_at).getTime();
+            const twentyFourHours = 24 * 60 * 60 * 1000;
+            if (replyAge > twentyFourHours && request.user.role !== 'ceo') {
+                throw new errors_1.AuthorizationError('Replies older than 24 hours cannot be edited');
+            }
+            const updatedReply = await messageService.updateMessage(replyId, {
+                content,
+                is_edited: true,
+                edited_at: new Date(),
+            });
+            // Broadcast reply update
+            await utils_1.WebSocketUtils.sendToChannel(channelId, 'reply_updated', {
+                type: 'reply_updated',
+                channelId,
+                messageId,
+                replyId,
+                isThreadReply: !!existingReply.thread_root_id,
+                threadRootId: existingReply.thread_root_id,
+                reply: updatedReply,
+                userId: request.user.userId,
+                userName: request.user.name,
+                userRole: request.user.role,
+                timestamp: new Date().toISOString(),
+            });
+            logger_1.loggers.api.info({
+                userId: request.user?.userId,
+                channelId,
+                messageId,
+                replyId,
+                isThreadReply: !!existingReply.thread_root_id,
+            }, 'Reply updated successfully');
+            reply.send({
+                success: true,
+                data: updatedReply,
+                timestamp: new Date().toISOString(),
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                ...(request.user && {
+                    user: {
+                        id: request.user.id,
+                        email: request.user.email,
+                        role: request.user.role,
+                    },
+                }),
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers,
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to update reply');
+            if (error instanceof errors_1.NotFoundError || error instanceof errors_1.AuthorizationError || error instanceof errors_1.ValidationError) {
+                reply.code(error.statusCode).send((0, errors_1.formatErrorResponse)(error));
+            }
+            else {
+                reply.code(500).send({
+                    error: {
+                        message: 'Failed to update reply',
+                        code: 'SERVER_ERROR',
+                    },
+                });
+            }
+        }
+    });
+    /**
+     * DELETE /channels/:channelId/messages/:messageId/replies/:replyId - Delete reply
+     */
+    fastify.delete('/channels/:channelId/messages/:messageId/replies/:replyId', {
+        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess],
+        schema: {
+            params: typebox_1.Type.Object({
+                channelId: validation_1.UUIDSchema,
+                messageId: validation_1.UUIDSchema,
+                replyId: validation_1.UUIDSchema,
+            }),
+            response: {
+                200: validation_1.SuccessResponseSchema,
+            },
+        },
+    }, async (request, reply) => {
+        try {
+            const { channelId, messageId, replyId } = request.params;
+            // Check if the reply exists and is actually a reply to the specified message
+            const existingReply = await index_1.messageRepository.findById(replyId);
+            if (!existingReply) {
+                throw new errors_1.NotFoundError('Reply not found');
+            }
+            if (existingReply.reply_to_id !== messageId) {
+                throw new errors_1.ValidationError('Message is not a reply to the specified parent message', [
+                    { field: 'replyId', message: 'Not a reply to the specified parent message' }
+                ]);
+            }
+            // Check if user can delete this reply
+            const canDelete = existingReply.user_id === request.user.userId ||
+                request.user.role === 'ceo';
+            if (!canDelete) {
+                throw new errors_1.AuthorizationError('You can only delete your own replies');
+            }
+            const success = await index_1.messageRepository.softDelete(replyId, request.user.userId);
+            if (!success) {
+                throw new errors_1.NotFoundError('Reply not found');
+            }
+            // Clear message cache
+            await CacheService_1.cacheService.messages.delete(cache_decorators_1.CacheKeyUtils.messageKey(replyId));
+            // Broadcast reply deletion
+            await utils_1.WebSocketUtils.sendToChannel(channelId, 'reply_deleted', {
+                type: 'reply_deleted',
+                channelId,
+                messageId,
+                replyId,
+                isThreadReply: !!existingReply.thread_root_id,
+                threadRootId: existingReply.thread_root_id,
+                userId: request.user.userId,
+                userName: request.user.name,
+                userRole: request.user.role,
+                timestamp: new Date().toISOString(),
+            });
+            logger_1.loggers.api.info({
+                userId: request.user?.userId,
+                channelId,
+                messageId,
+                replyId,
+                isThreadReply: !!existingReply.thread_root_id,
+            }, 'Reply deleted successfully');
+            reply.send({
+                success: true,
+                message: 'Reply deleted successfully',
+                timestamp: new Date().toISOString(),
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                ...(request.user && {
+                    user: {
+                        id: request.user.id,
+                        email: request.user.email,
+                        role: request.user.role,
+                    },
+                }),
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers,
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to delete reply');
+            if (error instanceof errors_1.NotFoundError || error instanceof errors_1.AuthorizationError || error instanceof errors_1.ValidationError) {
+                reply.code(error.statusCode).send((0, errors_1.formatErrorResponse)(error));
+            }
+            else {
+                reply.code(500).send({
+                    error: {
+                        message: 'Failed to delete reply',
+                        code: 'SERVER_ERROR',
+                    },
+                });
+            }
+        }
+    });
+    // ============================================================================
+    // REACTIONS ENDPOINTS
+    // ============================================================================
+    /**
+     * GET /channels/:channelId/messages/:messageId/reactions - Get message reactions
+     */
+    fastify.get('/channels/:channelId/messages/:messageId/reactions', {
+        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess, middleware_1.apiRateLimit],
+        schema: {
+            params: typebox_1.Type.Object({
+                channelId: validation_1.UUIDSchema,
+                messageId: validation_1.UUIDSchema,
+            }),
+            response: {
+                200: typebox_1.Type.Object({
+                    success: typebox_1.Type.Boolean(),
+                    data: typebox_1.Type.Array(typebox_1.Type.Object({
+                        emoji: typebox_1.Type.String(),
+                        count: typebox_1.Type.Integer(),
+                        users: typebox_1.Type.Array(typebox_1.Type.Object({
+                            id: validation_1.UUIDSchema,
+                            name: typebox_1.Type.String(),
+                            avatar_url: typebox_1.Type.Optional(typebox_1.Type.String()),
+                        })),
+                        hasReacted: typebox_1.Type.Boolean(),
+                    })),
+                    timestamp: typebox_1.Type.String({ format: 'date-time' }),
+                }),
+            },
+        },
+    }, async (request, reply) => {
+        try {
+            const { channelId, messageId } = request.params;
+            // Get reactions from reaction repository
+            const reactions = await index_1.reactionRepository.getMessageReactions(messageId);
+            // Add hasReacted field for current user
+            const reactionsWithUserFlag = reactions.map(reaction => ({
+                ...reaction,
+                hasReacted: reaction.users.some(user => user.id === request.user.userId),
+            }));
+            logger_1.loggers.api.info({
+                userId: request.user?.userId,
+                channelId,
+                messageId,
+                reactionCount: reactions.length,
+            }, 'Message reactions retrieved');
+            reply.send({
+                success: true,
+                data: reactionsWithUserFlag,
+                timestamp: new Date().toISOString(),
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                ...(request.user && {
+                    user: {
+                        id: request.user.id,
+                        email: request.user.email,
+                        role: request.user.role,
+                    },
+                }),
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers,
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to retrieve message reactions');
+            reply.code(500).send({
+                error: {
+                    message: 'Failed to retrieve message reactions',
+                    code: 'SERVER_ERROR',
+                },
+            });
+        }
+    });
+    /**
+     * POST /channels/:channelId/messages/:messageId/reactions - Add/Toggle reaction
+     */
+    fastify.post('/channels/:channelId/messages/:messageId/reactions', {
+        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess],
+        schema: {
+            params: typebox_1.Type.Object({
+                channelId: validation_1.UUIDSchema,
+                messageId: validation_1.UUIDSchema,
+            }),
+            body: typebox_1.Type.Object({
+                emoji: typebox_1.Type.String({ minLength: 1, maxLength: 20 }),
+            }),
+            response: {
+                200: typebox_1.Type.Object({
+                    success: typebox_1.Type.Boolean(),
+                    data: typebox_1.Type.Object({
+                        action: typebox_1.Type.Union([typebox_1.Type.Literal('added'), typebox_1.Type.Literal('removed')]),
+                        emoji: typebox_1.Type.String(),
+                        messageId: validation_1.UUIDSchema,
+                    }),
+                    timestamp: typebox_1.Type.String({ format: 'date-time' }),
+                }),
+            },
+        },
+    }, async (request, reply) => {
+        try {
+            const { channelId, messageId } = request.params;
+            const { emoji } = request.body;
+            // Verify message exists
+            const message = await index_1.messageRepository.findById(messageId);
+            if (!message) {
+                throw new errors_1.NotFoundError('Message not found');
+            }
+            // Toggle reaction
+            const result = await index_1.reactionRepository.toggleReaction(messageId, request.user.userId, emoji);
+            // Broadcast reaction update
+            await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_reaction_updated', {
+                type: 'message_reaction_updated',
+                channelId,
+                messageId,
+                emoji,
+                action: result.action,
+                userId: request.user.userId,
+                userName: request.user.name,
+                userRole: request.user.role,
+                timestamp: new Date().toISOString(),
+            });
+            logger_1.loggers.api.info({
+                userId: request.user?.userId,
+                channelId,
+                messageId,
+                emoji,
+                action: result.action,
+            }, 'Message reaction toggled successfully');
+            reply.send({
+                success: true,
+                data: {
+                    action: result.action,
+                    emoji,
+                    messageId,
+                },
+                timestamp: new Date().toISOString(),
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                ...(request.user && {
+                    user: {
+                        id: request.user.id,
+                        email: request.user.email,
+                        role: request.user.role,
+                    },
+                }),
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers,
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to toggle message reaction');
+            if (error instanceof errors_1.ValidationError || error instanceof errors_1.NotFoundError) {
+                reply.code(error.statusCode).send((0, errors_1.formatErrorResponse)(error));
+            }
+            else {
+                reply.code(500).send({
+                    error: {
+                        message: 'Failed to toggle message reaction',
+                        code: 'SERVER_ERROR',
+                    },
+                });
+            }
+        }
+    });
+    /**
+     * DELETE /channels/:channelId/messages/:messageId/reactions/:emoji - Remove specific reaction
+     */
+    fastify.delete('/channels/:channelId/messages/:messageId/reactions/:emoji', {
+        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess],
+        schema: {
+            params: typebox_1.Type.Object({
+                channelId: validation_1.UUIDSchema,
+                messageId: validation_1.UUIDSchema,
+                emoji: typebox_1.Type.String({ minLength: 1, maxLength: 20 }),
+            }),
+            response: {
+                200: validation_1.SuccessResponseSchema,
+            },
+        },
+    }, async (request, reply) => {
+        try {
+            const { channelId, messageId, emoji } = request.params;
+            // Check if reaction exists first
+            const existingReaction = await index_1.reactionRepository.findReaction(messageId, request.user.userId, emoji);
+            if (!existingReaction) {
+                throw new errors_1.NotFoundError('Reaction not found or already removed');
+            }
+            const success = await index_1.reactionRepository.softDelete(existingReaction.id, request.user.userId);
+            if (!success) {
+                throw new errors_1.NotFoundError('Failed to remove reaction');
+            }
+            // Broadcast reaction removal
+            await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_reaction_updated', {
+                type: 'message_reaction_updated',
+                channelId,
+                messageId,
+                emoji,
+                action: 'removed',
+                userId: request.user.userId,
+                userName: request.user.name,
+                userRole: request.user.role,
+                timestamp: new Date().toISOString(),
+            });
+            logger_1.loggers.api.info({
+                userId: request.user?.userId,
+                channelId,
+                messageId,
+                emoji,
+            }, 'Message reaction removed successfully');
+            reply.send({
+                success: true,
+                message: 'Reaction removed successfully',
+                timestamp: new Date().toISOString(),
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                ...(request.user && {
+                    user: {
+                        id: request.user.id,
+                        email: request.user.email,
+                        role: request.user.role,
+                    },
+                }),
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers,
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to remove message reaction');
+            if (error instanceof errors_1.NotFoundError) {
+                reply.code(404).send((0, errors_1.formatErrorResponse)(error));
+            }
+            else {
+                reply.code(500).send({
+                    error: {
+                        message: 'Failed to remove message reaction',
                         code: 'SERVER_ERROR',
                     },
                 });

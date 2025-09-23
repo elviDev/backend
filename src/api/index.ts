@@ -9,8 +9,6 @@ import { registerChannelRoutes } from './routes/ChannelRoutes';
 import { registerTaskRoutes } from './routes/TaskRoutes';
 import { registerDocsRoutes } from './routes/DocsRoutes';
 import { registerMessageRoutes } from './routes/MessageRoutes';
-import { registerThreadRoutes } from './routes/ThreadRoutes';
-import { registerReactionRoutes } from './routes/ReactionRoutes';
 import { registerActivityRoutes } from './routes/ActivityRoutes';
 import { notificationRoutes } from './routes/NotificationRoutes';
 import { announcementRoutes } from './routes/AnnouncementRoutes';
@@ -25,9 +23,7 @@ export const registerAPIRoutes = async (fastify: FastifyInstance): Promise<void>
     await fastify.register(registerUserRoutes);
     await fastify.register(registerChannelRoutes);
     await fastify.register(registerTaskRoutes);
-    await fastify.register(registerMessageRoutes);
-    await fastify.register(registerThreadRoutes);
-    await fastify.register(registerReactionRoutes);
+    await fastify.register(registerMessageRoutes); // Now includes threads and reactions
     await fastify.register(registerActivityRoutes);
     await fastify.register(registerDocsRoutes);
     await fastify.register(notificationRoutes);

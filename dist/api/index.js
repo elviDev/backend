@@ -23,7 +23,7 @@ const registerAPIRoutes = async (fastify) => {
         await fastify.register(UserRoutes_1.registerUserRoutes);
         await fastify.register(ChannelRoutes_1.registerChannelRoutes);
         await fastify.register(TaskRoutes_1.registerTaskRoutes);
-        await fastify.register(MessageRoutes_1.registerMessageRoutes);
+        await fastify.register(MessageRoutes_1.registerMessageRoutes); // Now includes threads and reactions
         await fastify.register(ActivityRoutes_1.registerActivityRoutes);
         await fastify.register(DocsRoutes_1.registerDocsRoutes);
         await fastify.register(NotificationRoutes_1.notificationRoutes);
