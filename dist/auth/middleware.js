@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.auditLog = exports.requireChannelAccess = exports.requireResourceOwnership = exports.apiRateLimit = exports.voiceRateLimit = exports.authRateLimit = exports.rateLimit = exports.authorizeVoiceCommands = exports.requireManagerOrCEO = exports.requireCEO = exports.authorizeRoles = exports.authorize = exports.optionalAuthenticate = exports.authenticate = void 0;
+exports.auditLog = exports.requireTaskCommentAccess = exports.requireChannelMembership = exports.requireChannelAccess = exports.requireResourceOwnership = exports.apiRateLimit = exports.voiceRateLimit = exports.authRateLimit = exports.rateLimit = exports.authorizeVoiceCommands = exports.requireManagerOrCEO = exports.requireCEO = exports.authorizeRoles = exports.authorize = exports.optionalAuthenticate = exports.authenticate = void 0;
 const jwt_1 = require("./jwt");
 const index_1 = require("@db/index");
 const logger_1 = require("@utils/logger");
@@ -340,6 +340,115 @@ const requireChannelAccess = async (request, reply) => {
     }
 };
 exports.requireChannelAccess = requireChannelAccess;
+/**
+ * Require channel membership for sending messages
+ * More restrictive than requireChannelAccess - only members can send messages
+ */
+const requireChannelMembership = async (request, reply) => {
+    if (!request.user || !request.user.isAuthenticated) {
+        throw new errors_1.AuthenticationError('Authentication required');
+    }
+    // Check for channel ID in different parameter names used in routes
+    const channelId = request.params.channelId ||
+        request.params.id ||
+        request.body?.channelId;
+    if (!channelId) {
+        throw new errors_1.AuthorizationError('Channel ID not specified');
+    }
+    try {
+        const { channelRepository } = await Promise.resolve().then(() => __importStar(require('@db/index')));
+        const channel = await channelRepository.findById(channelId);
+        if (!channel) {
+            throw new errors_1.AuthorizationError('Channel not found');
+        }
+        // CEO can send messages to any channel (as they are usually added to all channels)
+        if (request.user.role === 'ceo') {
+            return;
+        }
+        // Creator can always send messages
+        if (channel.created_by === request.user.userId) {
+            return;
+        }
+        // Check if user is explicitly a member
+        if (!channel.members || !channel.members.includes(request.user.userId)) {
+            logger_1.securityLogger.logAuthzEvent('access_denied', {
+                userId: request.user.userId,
+                channelId,
+                resource: request.url,
+                action: request.method,
+                ip: request.ip,
+                reason: 'not_channel_member',
+            });
+            throw new errors_1.AuthorizationError('Only channel members can send messages to this channel');
+        }
+        logger_1.securityLogger.logAuthzEvent('access_granted', {
+            userId: request.user.userId,
+            channelId,
+            resource: request.url,
+            action: request.method,
+            ip: request.ip,
+            reason: 'channel_member',
+        });
+    }
+    catch (error) {
+        if (error instanceof errors_1.AuthorizationError) {
+            throw error;
+        }
+        logger_1.logger.error({ error, channelId, userId: request.user.userId }, 'Error checking channel membership');
+        throw new errors_1.AuthorizationError('Channel membership verification failed');
+    }
+};
+exports.requireChannelMembership = requireChannelMembership;
+/**
+ * Task comment authorization middleware - ensures only task assignees and owner can comment
+ */
+const requireTaskCommentAccess = async (request, reply) => {
+    if (!request.user || !request.user.isAuthenticated) {
+        throw new errors_1.AuthenticationError('Authentication required for this resource');
+    }
+    // CEO can comment on any task
+    if (request.user.role === 'ceo') {
+        return;
+    }
+    // Get task ID from parameters
+    const taskId = request.params.taskId;
+    if (!taskId) {
+        throw new errors_1.AuthorizationError('Task ID not specified');
+    }
+    try {
+        const { taskRepository } = await Promise.resolve().then(() => __importStar(require('@db/index')));
+        const task = await taskRepository.findById(taskId);
+        if (!task) {
+            throw new errors_1.AuthorizationError('Task not found');
+        }
+        // Check if user is the task owner
+        if (task.created_by === request.user.userId) {
+            return;
+        }
+        // Check if user is assigned to the task
+        if (task.assigned_to && task.assigned_to.includes(request.user.userId)) {
+            return;
+        }
+        // If user is neither owner nor assignee, deny access
+        logger_1.securityLogger.logAuthzEvent('access_denied', {
+            userId: request.user.userId,
+            taskId,
+            resource: request.url,
+            action: request.method,
+            ip: request.ip,
+            reason: 'not_task_owner_or_assignee',
+        });
+        throw new errors_1.AuthorizationError('Only task owner and assignees can comment on this task');
+    }
+    catch (error) {
+        if (error instanceof errors_1.AuthorizationError) {
+            throw error;
+        }
+        logger_1.logger.error({ error, taskId, userId: request.user.userId }, 'Error checking task comment access');
+        throw new errors_1.AuthorizationError('Unable to verify task comment access');
+    }
+};
+exports.requireTaskCommentAccess = requireTaskCommentAccess;
 /**
  * Audit logging middleware - logs all requests for security audit
  */

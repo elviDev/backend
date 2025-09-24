@@ -1984,6 +1984,49 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
         // Get the comment with author information
         const commentWithDetails = await commentRepository.getCommentById(comment.id);
 
+        // Broadcast comment creation to task watchers and assignees
+        try {
+          // Get task details to find assignees and channel
+          const task = await taskRepository.findById(taskId);
+          if (task) {
+            // Broadcast to task assignees and watchers
+            const taskWatchers = [...(task.assigned_to || []), ...(task.watchers || [])];
+            const uniqueWatchers = [...new Set(taskWatchers)];
+
+            await WebSocketUtils.broadcastTaskUpdate({
+              type: 'comment_created',
+              taskId,
+              userId: request.user!.userId,
+              userName: request.user!.name || 'Unknown User',
+              userRole: request.user!.role,
+              commentId: comment.id,
+              data: commentWithDetails,
+              authorId: request.user!.userId,
+              authorName: request.user!.name || 'Unknown User',
+              recipients: uniqueWatchers,
+            });
+
+            // If task has a channel, also broadcast to channel members
+            if (task.channel_id) {
+              await WebSocketUtils.broadcastChannelMessage({
+                type: 'task_comment',
+                channelId: task.channel_id,
+                userId: request.user!.userId,
+                userName: request.user!.name || 'Unknown User',
+                userRole: request.user!.role,
+                taskId,
+                commentId: comment.id,
+                message: `New comment on task "${task.title}": ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`,
+                authorId: request.user!.userId,
+                authorName: request.user!.name || 'Unknown User',
+              });
+            }
+          }
+        } catch (broadcastError) {
+          // Log error but don't fail the request
+          loggers.api.warn({ error: broadcastError, commentId: comment.id }, 'Failed to broadcast comment creation');
+        }
+
         loggers.api.info(
           {
             userId: request.user?.userId,
@@ -2062,6 +2105,49 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
           request.user!.userId,
           request.user!.role
         );
+
+        // Broadcast comment update to task watchers and assignees
+        try {
+          // Get task details to find assignees and channel
+          const task = await taskRepository.findById(taskId);
+          if (task) {
+            // Broadcast to task assignees and watchers
+            const taskWatchers = [...(task.assigned_to || []), ...(task.watchers || [])];
+            const uniqueWatchers = [...new Set(taskWatchers)];
+
+            await WebSocketUtils.broadcastTaskUpdate({
+              type: 'comment_updated',
+              taskId,
+              userId: request.user!.userId,
+              userName: request.user!.name || 'Unknown User',
+              userRole: request.user!.role,
+              commentId,
+              data: updatedComment,
+              authorId: request.user!.userId,
+              authorName: request.user!.name || 'Unknown User',
+              recipients: uniqueWatchers,
+            });
+
+            // If task has a channel, also broadcast to channel members
+            if (task.channel_id) {
+              await WebSocketUtils.broadcastChannelMessage({
+                type: 'task_comment_updated',
+                channelId: task.channel_id,
+                userId: request.user!.userId,
+                userName: request.user!.name || 'Unknown User',
+                userRole: request.user!.role,
+                taskId,
+                commentId,
+                message: `Comment updated on task "${task.title}"`,
+                authorId: request.user!.userId,
+                authorName: request.user!.name || 'Unknown User',
+              });
+            }
+          }
+        } catch (broadcastError) {
+          // Log error but don't fail the request
+          loggers.api.warn({ error: broadcastError, commentId }, 'Failed to broadcast comment update');
+        }
 
         loggers.api.info(
           {
@@ -2142,6 +2228,48 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
 
         if (!deleted) {
           throw new NotFoundError('Comment not found or already deleted');
+        }
+
+        // Broadcast comment deletion to task watchers and assignees
+        try {
+          // Get task details to find assignees and channel
+          const task = await taskRepository.findById(taskId);
+          if (task) {
+            // Broadcast to task assignees and watchers
+            const taskWatchers = [...(task.assigned_to || []), ...(task.watchers || [])];
+            const uniqueWatchers = [...new Set(taskWatchers)];
+
+            await WebSocketUtils.broadcastTaskUpdate({
+              type: 'comment_deleted',
+              taskId,
+              userId: request.user!.userId,
+              userName: request.user!.name || 'Unknown User',
+              userRole: request.user!.role,
+              commentId,
+              authorId: request.user!.userId,
+              authorName: request.user!.name || 'Unknown User',
+              recipients: uniqueWatchers,
+            });
+
+            // If task has a channel, also broadcast to channel members
+            if (task.channel_id) {
+              await WebSocketUtils.broadcastChannelMessage({
+                type: 'task_comment_deleted',
+                channelId: task.channel_id,
+                userId: request.user!.userId,
+                userName: request.user!.name || 'Unknown User',
+                userRole: request.user!.role,
+                taskId,
+                commentId,
+                message: `Comment deleted from task "${task.title}"`,
+                authorId: request.user!.userId,
+                authorName: request.user!.name || 'Unknown User',
+              });
+            }
+          }
+        } catch (broadcastError) {
+          // Log error but don't fail the request
+          loggers.api.warn({ error: broadcastError, commentId }, 'Failed to broadcast comment deletion');
         }
 
         loggers.api.info(

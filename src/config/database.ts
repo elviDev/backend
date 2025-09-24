@@ -20,11 +20,15 @@ const poolConfig: PoolConfig = {
   maxUses: 7500, // Maximum uses per connection before recycling
 
   // SSL configuration for production and AWS RDS
-  ssl: config.app.isProduction || config.database.url.includes('rds.amazonaws.com')
+  ssl: config.database.url.includes('rds.amazonaws.com')
     ? {
-        rejectUnauthorized: false, // Configure properly in production
+        rejectUnauthorized: false, // Required for AWS RDS
       }
-    : false,
+    : config.app.isProduction
+      ? {
+          rejectUnauthorized: false,
+        }
+      : false,
 
   // Query timeout settings
   query_timeout: 30000, // 30 seconds max query time

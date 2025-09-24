@@ -71,6 +71,15 @@ export declare const requireResourceOwnership: (userIdParam?: string) => (reques
  */
 export declare const requireChannelAccess: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 /**
+ * Require channel membership for sending messages
+ * More restrictive than requireChannelAccess - only members can send messages
+ */
+export declare const requireChannelMembership: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+/**
+ * Task comment authorization middleware - ensures only task assignees and owner can comment
+ */
+export declare const requireTaskCommentAccess: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+/**
  * Audit logging middleware - logs all requests for security audit
  */
 export declare const auditLog: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;

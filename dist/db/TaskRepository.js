@@ -14,6 +14,12 @@ class TaskRepository extends BaseRepository_1.default {
      * Create new task with validation
      */
     async createTask(taskData, client) {
+        // MANDATORY: Every task must belong to a channel
+        if (!taskData.channel_id) {
+            throw new errors_1.ValidationError('channel_id is required - every task must belong to a channel', [
+                { field: 'channel_id', message: 'Tasks must belong to a channel', value: taskData.channel_id }
+            ]);
+        }
         // Validate parent task if specified
         if (taskData.parent_task_id) {
             const parentTask = await this.findById(taskData.parent_task_id, false, client);

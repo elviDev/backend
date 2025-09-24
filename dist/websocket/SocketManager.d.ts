@@ -87,6 +87,10 @@ declare class SocketManager implements ISocketManager {
      */
     private handlePresenceUpdate;
     /**
+     * Handle token refresh requests from connected clients
+     */
+    private handleTokenRefresh;
+    /**
      * Broadcast user status to relevant users
      */
     private broadcastUserStatus;

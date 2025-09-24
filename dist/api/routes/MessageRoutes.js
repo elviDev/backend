@@ -258,7 +258,7 @@ const registerMessageRoutes = async (fastify) => {
      * POST /channels/:channelId/messages - Send message
      */
     fastify.post('/channels/:channelId/messages', {
-        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess],
+        preHandler: [middleware_1.authenticate, middleware_1.requireChannelMembership],
         schema: {
             params: typebox_1.Type.Object({
                 channelId: validation_1.UUIDSchema,
@@ -795,7 +795,7 @@ const registerMessageRoutes = async (fastify) => {
      * POST /channels/:channelId/messages/:messageId/thread - Create thread reply
      */
     fastify.post('/channels/:channelId/messages/:messageId/thread', {
-        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess],
+        preHandler: [middleware_1.authenticate, middleware_1.requireChannelMembership],
         schema: {
             params: typebox_1.Type.Object({
                 channelId: validation_1.UUIDSchema,
@@ -1050,7 +1050,7 @@ const registerMessageRoutes = async (fastify) => {
      * POST /channels/:channelId/messages/:messageId/replies - Create direct reply
      */
     fastify.post('/channels/:channelId/messages/:messageId/replies', {
-        preHandler: [middleware_1.authenticate, middleware_1.requireChannelAccess],
+        preHandler: [middleware_1.authenticate, middleware_1.requireChannelMembership],
         schema: {
             params: typebox_1.Type.Object({
                 channelId: validation_1.UUIDSchema,

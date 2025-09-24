@@ -75,17 +75,60 @@ class SocketManager {
             return;
         this.io.use(async (socket, next) => {
             try {
-                // Extract token from auth header or query parameter
-                const token = socket.handshake.auth?.token || socket.handshake.query?.token;
-                if (!token) {
+                // Extract access token and refresh token from auth header or query parameters
+                const accessToken = socket.handshake.auth?.token || socket.handshake.query?.token;
+                const refreshToken = socket.handshake.auth?.refreshToken || socket.handshake.query?.refreshToken;
+                if (!accessToken) {
                     logger_1.loggers.websocket.warn?.({
                         socketId: socket.id,
                         ip: socket.handshake.address,
                     }, 'WebSocket connection attempt without token');
                     return next(new errors_1.AuthenticationError('Authentication token required'));
                 }
-                // Verify JWT token
-                const payload = await jwt_1.jwtService.verifyAccessToken(token);
+                let payload;
+                let finalAccessToken = accessToken;
+                try {
+                    // Try to verify the access token
+                    payload = await jwt_1.jwtService.verifyAccessToken(accessToken);
+                }
+                catch (error) {
+                    // If access token is expired and we have a refresh token, try to refresh
+                    if (error instanceof errors_1.TokenExpiredError && refreshToken) {
+                        try {
+                            logger_1.loggers.websocket.info?.({
+                                socketId: socket.id,
+                                ip: socket.handshake.address,
+                            }, 'Access token expired, attempting to refresh');
+                            const newTokens = await jwt_1.jwtService.refreshTokens(refreshToken);
+                            finalAccessToken = newTokens.accessToken;
+                            payload = await jwt_1.jwtService.verifyAccessToken(finalAccessToken);
+                            // Emit new tokens to client so they can update their stored tokens
+                            socket.emit('token_refreshed', {
+                                accessToken: newTokens.accessToken,
+                                refreshToken: newTokens.refreshToken,
+                                expiresIn: newTokens.expiresIn,
+                                refreshExpiresIn: newTokens.refreshExpiresIn,
+                            });
+                            logger_1.loggers.websocket.info?.({
+                                socketId: socket.id,
+                                userId: payload.userId,
+                                ip: socket.handshake.address,
+                            }, 'WebSocket token refreshed successfully');
+                        }
+                        catch (refreshError) {
+                            logger_1.loggers.websocket.warn?.({
+                                error: refreshError,
+                                socketId: socket.id,
+                                ip: socket.handshake.address,
+                            }, 'Token refresh failed during WebSocket authentication');
+                            return next(new errors_1.AuthenticationError('Token expired and refresh failed'));
+                        }
+                    }
+                    else {
+                        // Re-throw the original error if we can't handle it
+                        throw error;
+                    }
+                }
                 // Get user details
                 const user = await index_2.userRepository.findById(payload.userId);
                 if (!user || user.deleted_at) {
@@ -119,7 +162,7 @@ class SocketManager {
                     socketId: socket.id,
                     ip: socket.handshake.address,
                 }, 'WebSocket authentication error');
-                if (error instanceof errors_1.AuthenticationError) {
+                if (error instanceof errors_1.AuthenticationError || error instanceof errors_1.TokenExpiredError) {
                     next(error);
                 }
                 else {
@@ -231,6 +274,10 @@ class SocketManager {
         // Handle presence updates
         socket.on('presence_update', (data) => {
             this.handlePresenceUpdate(socket, data.status);
+        });
+        // Handle token refresh requests
+        socket.on('refresh_token', async (data) => {
+            await this.handleTokenRefresh(socket, data.refreshToken);
         });
         // Generic event handler with rate limiting
         socket.use(([event, ...args], next) => {
@@ -454,6 +501,51 @@ class SocketManager {
      */
     handlePresenceUpdate(socket, status) {
         this.broadcastUserStatus(socket.userId, status);
+    }
+    /**
+     * Handle token refresh requests from connected clients
+     */
+    async handleTokenRefresh(socket, refreshToken) {
+        try {
+            if (!refreshToken) {
+                socket.emit('token_refresh_error', { message: 'Refresh token is required' });
+                return;
+            }
+            logger_1.loggers.websocket.info?.({
+                socketId: socket.id,
+                userId: socket.userId,
+            }, 'Processing token refresh request');
+            const newTokens = await jwt_1.jwtService.refreshTokens(refreshToken);
+            socket.emit('token_refreshed', {
+                accessToken: newTokens.accessToken,
+                refreshToken: newTokens.refreshToken,
+                expiresIn: newTokens.expiresIn,
+                refreshExpiresIn: newTokens.refreshExpiresIn,
+            });
+            logger_1.loggers.websocket.info?.({
+                socketId: socket.id,
+                userId: socket.userId,
+            }, 'Token refresh successful');
+        }
+        catch (error) {
+            logger_1.loggers.websocket.error?.({
+                error,
+                socketId: socket.id,
+                userId: socket.userId,
+            }, 'Token refresh failed');
+            socket.emit('token_refresh_error', {
+                message: 'Token refresh failed',
+                error: error instanceof Error ? error.message : 'Unknown error'
+            });
+            // If refresh token is also expired, disconnect the client
+            if (error instanceof errors_1.TokenExpiredError) {
+                logger_1.loggers.websocket.warn?.({
+                    socketId: socket.id,
+                    userId: socket.userId,
+                }, 'Refresh token expired, disconnecting client');
+                socket.disconnect(true);
+            }
+        }
     }
     /**
      * Broadcast user status to relevant users

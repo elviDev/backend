@@ -3,7 +3,10 @@
     "allow": [
       "Bash(node:*)",
       "Bash(npx tsx:*)",
-      "Bash(psql:*)"
+      "Bash(psql:*)",
+      "Bash(npm run build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(PGPASSWORD=ThisSuperColl psql -h database-1.cmze6s8yeur2.us-east-1.rds.amazonaws.com -U postgres -d postgres -c \"SELECT id, title FROM tasks LIMIT 3;\")"
     ],
     "deny": [],
     "ask": []

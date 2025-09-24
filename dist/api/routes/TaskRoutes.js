@@ -60,9 +60,9 @@ const validation_1 = require("@utils/validation");
 const CreateTaskSchema = typebox_1.Type.Object({
     title: typebox_1.Type.String({ minLength: 1, maxLength: 255 }),
     description: typebox_1.Type.Optional(typebox_1.Type.String({ maxLength: 2000 })),
-    channel_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
+    channel_id: validation_1.UUIDSchema, // REQUIRED - every task must belong to a channel
     parent_task_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
-    assigned_to: typebox_1.Type.Optional(typebox_1.Type.Array(validation_1.UUIDSchema)),
+    assigned_to: typebox_1.Type.Optional(typebox_1.Type.Array(validation_1.UUIDSchema, { minItems: 1 })),
     owned_by: typebox_1.Type.Optional(validation_1.UUIDSchema),
     priority: typebox_1.Type.Optional(validation_1.TaskPrioritySchema),
     task_type: typebox_1.Type.Optional(typebox_1.Type.Union([
@@ -465,11 +465,28 @@ const registerTaskRoutes = async (fastify) => {
         },
     }, async (request, reply) => {
         try {
-            // If channel_id is specified, verify user has access to the channel
-            if (request.body.channel_id) {
-                const hasChannelAccess = await index_1.channelRepository.canUserAccess(request.body.channel_id, request.user.userId, request.user.role);
-                if (!hasChannelAccess) {
-                    throw new errors_1.AuthorizationError('You do not have access to create tasks in this channel');
+            // Channel ID is now REQUIRED - every task must belong to a channel
+            if (!request.body.channel_id) {
+                throw new errors_1.ValidationError('channel_id is required - every task must belong to a channel');
+            }
+            // Verify user has access to the channel
+            const hasChannelAccess = await index_1.channelRepository.canUserAccess(request.body.channel_id, request.user.userId, request.user.role);
+            if (!hasChannelAccess) {
+                throw new errors_1.AuthorizationError('You do not have access to create tasks in this channel');
+            }
+            // Get channel details to check member list
+            const channel = await index_1.channelRepository.findById(request.body.channel_id);
+            if (!channel) {
+                throw new errors_1.ValidationError('Channel not found');
+            }
+            // Validate that assigned users are channel members
+            if (request.body.assigned_to && request.body.assigned_to.length > 0) {
+                const channelMembers = channel.members || [];
+                const invalidAssignees = request.body.assigned_to.filter((userId) => !channelMembers.includes(userId));
+                if (invalidAssignees.length > 0) {
+                    throw new errors_1.ValidationError('Tasks can only be assigned to channel members', [
+                        { field: 'assigned_to', message: `Users ${invalidAssignees.join(', ')} are not members of this channel`, value: invalidAssignees }
+                    ]);
                 }
             }
             // Check if manager is trying to assign other managers
@@ -481,16 +498,28 @@ const registerTaskRoutes = async (fastify) => {
                     throw new errors_1.AuthorizationError('Managers cannot assign other managers to tasks');
                 }
             }
+            // Ensure task always has assignees - prevents unassigned tasks
+            const assignedTo = request.body.assigned_to && request.body.assigned_to.length > 0
+                ? request.body.assigned_to
+                : [request.user.userId];
             const taskData = {
                 ...request.body,
                 created_by: request.user.userId,
-                assigned_to: request.body.assigned_to || [request.user.userId],
-                owned_by: request.body.owned_by || request.user.userId,
+                assigned_to: assignedTo,
+                owned_by: request.body.owned_by || assignedTo[0],
                 tags: request.body.tags || [],
                 labels: request.body.labels || {},
                 due_date: request.body.due_date ? new Date(request.body.due_date) : undefined,
                 start_date: request.body.start_date ? new Date(request.body.start_date) : undefined,
             };
+            // Double-check to prevent unassigned tasks
+            if (!taskData.assigned_to || taskData.assigned_to.length === 0) {
+                throw new errors_1.ValidationError('Tasks must have at least one assignee');
+            }
+            // Double-check to prevent tasks without channels
+            if (!taskData.channel_id) {
+                throw new errors_1.ValidationError('Tasks must belong to a channel');
+            }
             const task = await taskService.createTask(taskData);
             // Create activity for task creation
             try {
@@ -1217,6 +1246,21 @@ const registerTaskRoutes = async (fastify) => {
     }, async (request, reply) => {
         try {
             const { channelId } = request.params;
+            // Get channel details to validate member assignments
+            const channel = await index_1.channelRepository.findById(channelId);
+            if (!channel) {
+                throw new errors_1.ValidationError('Channel not found');
+            }
+            // Validate that assigned users are channel members
+            if (request.body.assigned_to && request.body.assigned_to.length > 0) {
+                const channelMembers = channel.members || [];
+                const invalidAssignees = request.body.assigned_to.filter((userId) => !channelMembers.includes(userId));
+                if (invalidAssignees.length > 0) {
+                    throw new errors_1.ValidationError('Tasks can only be assigned to channel members', [
+                        { field: 'assigned_to', message: `Users ${invalidAssignees.join(', ')} are not members of this channel`, value: invalidAssignees }
+                    ]);
+                }
+            }
             // Check if manager is trying to assign other managers
             if (request.user.role === 'manager' && request.body.assigned_to) {
                 const { userRepository } = await Promise.resolve().then(() => __importStar(require('@db/index')));
@@ -1226,17 +1270,29 @@ const registerTaskRoutes = async (fastify) => {
                     throw new errors_1.AuthorizationError('Managers cannot assign other managers to tasks');
                 }
             }
+            // Ensure channel task always has assignees - prevents unassigned tasks
+            const assignedTo = request.body.assigned_to && request.body.assigned_to.length > 0
+                ? request.body.assigned_to
+                : [request.user.userId];
             const taskData = {
                 ...request.body,
                 channel_id: channelId,
                 created_by: request.user.userId,
-                assigned_to: request.body.assigned_to || [request.user.userId],
-                owned_by: request.body.owned_by || request.user.userId,
+                assigned_to: assignedTo,
+                owned_by: request.body.owned_by || assignedTo[0],
                 tags: request.body.tags || [],
                 labels: request.body.labels || {},
                 due_date: request.body.due_date ? new Date(request.body.due_date) : undefined,
                 start_date: request.body.start_date ? new Date(request.body.start_date) : undefined,
             };
+            // Double-check to prevent unassigned tasks
+            if (!taskData.assigned_to || taskData.assigned_to.length === 0) {
+                throw new errors_1.ValidationError('Tasks must have at least one assignee');
+            }
+            // Double-check to prevent tasks without channels (should be impossible for this endpoint)
+            if (!taskData.channel_id) {
+                throw new errors_1.ValidationError('Tasks must belong to a channel');
+            }
             const task = await taskService.createTask(taskData);
             // Create activity for channel task creation
             try {
@@ -1625,7 +1681,7 @@ const registerTaskRoutes = async (fastify) => {
      * POST /tasks/:taskId/comments - Add comment to task
      */
     fastify.post('/tasks/:taskId/comments', {
-        preHandler: [middleware_1.authenticate, middleware_1.apiRateLimit],
+        preHandler: [middleware_1.authenticate, middleware_1.requireTaskCommentAccess, middleware_1.apiRateLimit],
         schema: {
             params: typebox_1.Type.Object({
                 taskId: validation_1.UUIDSchema,
@@ -1650,6 +1706,42 @@ const registerTaskRoutes = async (fastify) => {
             const comment = await index_1.commentRepository.createComment(commentData);
             // Get the comment with author information
             const commentWithDetails = await index_1.commentRepository.getCommentById(comment.id);
+            // Broadcast comment creation to task watchers and assignees
+            try {
+                // Get task details to find assignees and channel
+                const task = await index_1.taskRepository.findById(taskId);
+                if (task) {
+                    // Broadcast to task assignees and watchers
+                    const taskWatchers = [...(task.assigned_to || []), ...(task.watchers || [])];
+                    const uniqueWatchers = [...new Set(taskWatchers)];
+                    await utils_1.WebSocketUtils.broadcastTaskUpdate({
+                        type: 'comment_created',
+                        taskId,
+                        commentId: comment.id,
+                        data: commentWithDetails,
+                        authorId: request.user.userId,
+                        authorName: request.user.name || 'Unknown User',
+                        recipients: uniqueWatchers,
+                    });
+                    // If task has a channel, also broadcast to channel members
+                    if (task.channel_id) {
+                        await utils_1.WebSocketUtils.broadcastChannelMessage({
+                            type: 'task_comment',
+                            channelId: task.channel_id,
+                            taskId,
+                            commentId: comment.id,
+                            message: `New comment on task "${task.title}": ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`,
+                            authorId: request.user.userId,
+                            authorName: request.user.name || 'Unknown User',
+                            timestamp: new Date().toISOString(),
+                        });
+                    }
+                }
+            }
+            catch (broadcastError) {
+                // Log error but don't fail the request
+                logger_1.loggers.api.warn({ error: broadcastError, commentId: comment.id }, 'Failed to broadcast comment creation');
+            }
             logger_1.loggers.api.info({
                 userId: request.user?.userId,
                 taskId,
@@ -1696,7 +1788,7 @@ const registerTaskRoutes = async (fastify) => {
      * PUT /tasks/:taskId/comments/:commentId - Update comment
      */
     fastify.put('/tasks/:taskId/comments/:commentId', {
-        preHandler: [middleware_1.authenticate, middleware_1.apiRateLimit],
+        preHandler: [middleware_1.authenticate, middleware_1.requireTaskCommentAccess, middleware_1.apiRateLimit],
         schema: {
             params: typebox_1.Type.Object({
                 taskId: validation_1.UUIDSchema,
@@ -1712,6 +1804,42 @@ const registerTaskRoutes = async (fastify) => {
             const { taskId, commentId } = request.params;
             const { content } = request.body;
             const updatedComment = await index_1.commentRepository.updateComment(commentId, { content }, request.user.userId, request.user.role);
+            // Broadcast comment update to task watchers and assignees
+            try {
+                // Get task details to find assignees and channel
+                const task = await index_1.taskRepository.findById(taskId);
+                if (task) {
+                    // Broadcast to task assignees and watchers
+                    const taskWatchers = [...(task.assigned_to || []), ...(task.watchers || [])];
+                    const uniqueWatchers = [...new Set(taskWatchers)];
+                    await utils_1.WebSocketUtils.broadcastTaskUpdate({
+                        type: 'comment_updated',
+                        taskId,
+                        commentId,
+                        data: updatedComment,
+                        authorId: request.user.userId,
+                        authorName: request.user.name || 'Unknown User',
+                        recipients: uniqueWatchers,
+                    });
+                    // If task has a channel, also broadcast to channel members
+                    if (task.channel_id) {
+                        await utils_1.WebSocketUtils.broadcastChannelMessage({
+                            type: 'task_comment_updated',
+                            channelId: task.channel_id,
+                            taskId,
+                            commentId,
+                            message: `Comment updated on task "${task.title}"`,
+                            authorId: request.user.userId,
+                            authorName: request.user.name || 'Unknown User',
+                            timestamp: new Date().toISOString(),
+                        });
+                    }
+                }
+            }
+            catch (broadcastError) {
+                // Log error but don't fail the request
+                logger_1.loggers.api.warn({ error: broadcastError, commentId }, 'Failed to broadcast comment update');
+            }
             logger_1.loggers.api.info({
                 userId: request.user?.userId,
                 taskId,
@@ -1761,7 +1889,7 @@ const registerTaskRoutes = async (fastify) => {
      * DELETE /tasks/:taskId/comments/:commentId - Delete comment
      */
     fastify.delete('/tasks/:taskId/comments/:commentId', {
-        preHandler: [middleware_1.authenticate, middleware_1.apiRateLimit],
+        preHandler: [middleware_1.authenticate, middleware_1.requireTaskCommentAccess, middleware_1.apiRateLimit],
         schema: {
             params: typebox_1.Type.Object({
                 taskId: validation_1.UUIDSchema,
@@ -1777,6 +1905,41 @@ const registerTaskRoutes = async (fastify) => {
             const deleted = await index_1.commentRepository.deleteComment(commentId, request.user.userId, request.user.role);
             if (!deleted) {
                 throw new errors_1.NotFoundError('Comment not found or already deleted');
+            }
+            // Broadcast comment deletion to task watchers and assignees
+            try {
+                // Get task details to find assignees and channel
+                const task = await index_1.taskRepository.findById(taskId);
+                if (task) {
+                    // Broadcast to task assignees and watchers
+                    const taskWatchers = [...(task.assigned_to || []), ...(task.watchers || [])];
+                    const uniqueWatchers = [...new Set(taskWatchers)];
+                    await utils_1.WebSocketUtils.broadcastTaskUpdate({
+                        type: 'comment_deleted',
+                        taskId,
+                        commentId,
+                        authorId: request.user.userId,
+                        authorName: request.user.name || 'Unknown User',
+                        recipients: uniqueWatchers,
+                    });
+                    // If task has a channel, also broadcast to channel members
+                    if (task.channel_id) {
+                        await utils_1.WebSocketUtils.broadcastChannelMessage({
+                            type: 'task_comment_deleted',
+                            channelId: task.channel_id,
+                            taskId,
+                            commentId,
+                            message: `Comment deleted from task "${task.title}"`,
+                            authorId: request.user.userId,
+                            authorName: request.user.name || 'Unknown User',
+                            timestamp: new Date().toISOString(),
+                        });
+                    }
+                }
+            }
+            catch (broadcastError) {
+                // Log error but don't fail the request
+                logger_1.loggers.api.warn({ error: broadcastError, commentId }, 'Failed to broadcast comment deletion');
             }
             logger_1.loggers.api.info({
                 userId: request.user?.userId,
@@ -1824,7 +1987,7 @@ const registerTaskRoutes = async (fastify) => {
      * POST /tasks/:taskId/comments/:commentId/reactions - Add reaction to comment
      */
     fastify.post('/tasks/:taskId/comments/:commentId/reactions', {
-        preHandler: [middleware_1.authenticate, middleware_1.apiRateLimit],
+        preHandler: [middleware_1.authenticate, middleware_1.requireTaskCommentAccess, middleware_1.apiRateLimit],
         schema: {
             params: typebox_1.Type.Object({
                 taskId: validation_1.UUIDSchema,
@@ -1901,7 +2064,7 @@ const registerTaskRoutes = async (fastify) => {
      * DELETE /tasks/:taskId/comments/:commentId/reactions - Remove reaction from comment
      */
     fastify.delete('/tasks/:taskId/comments/:commentId/reactions', {
-        preHandler: [middleware_1.authenticate, middleware_1.apiRateLimit],
+        preHandler: [middleware_1.authenticate, middleware_1.requireTaskCommentAccess, middleware_1.apiRateLimit],
         schema: {
             params: typebox_1.Type.Object({
                 taskId: validation_1.UUIDSchema,

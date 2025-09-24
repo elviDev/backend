@@ -36,10 +36,10 @@ export interface ChannelUpdateEvent extends ChannelEvent {
     };
 }
 export interface ChatMessageEvent extends ChannelEvent {
-    type: 'chat_message';
-    messageId: string;
+    type: 'chat_message' | 'task_comment' | 'task_comment_updated' | 'task_comment_deleted';
+    messageId?: string;
     message: string;
-    messageType: 'text' | 'file' | 'voice' | 'system';
+    messageType?: 'text' | 'file' | 'voice' | 'system';
     attachments?: Array<{
         id: string;
         name: string;
@@ -50,6 +50,10 @@ export interface ChatMessageEvent extends ChannelEvent {
     replyTo?: string;
     edited?: boolean;
     editedAt?: string;
+    taskId?: string;
+    commentId?: string;
+    authorId?: string;
+    authorName?: string;
 }
 export interface MessageUpdateEvent extends ChannelEvent {
     type: 'message_updated' | 'message_deleted';
@@ -65,8 +69,8 @@ export interface TaskEvent extends BaseSocketEvent {
     channelId?: string;
 }
 export interface TaskUpdateEvent extends TaskEvent {
-    type: 'task_created' | 'task_updated' | 'task_deleted' | 'task_completed';
-    task: {
+    type: 'task_created' | 'task_updated' | 'task_deleted' | 'task_completed' | 'comment_created' | 'comment_updated' | 'comment_deleted';
+    task?: {
         id: string;
         title: string;
         description?: string;
@@ -77,8 +81,13 @@ export interface TaskUpdateEvent extends TaskEvent {
         progress: number;
         tags: string[];
     };
-    action: 'create' | 'update' | 'delete' | 'assign' | 'unassign' | 'complete' | 'reopen';
+    action?: 'create' | 'update' | 'delete' | 'assign' | 'unassign' | 'complete' | 'reopen';
     changes?: Record<string, any>;
+    commentId?: string;
+    data?: any;
+    authorId?: string;
+    authorName?: string;
+    recipients?: string[];
 }
 export interface TaskAssignmentEvent extends TaskEvent {
     type: 'task_assigned' | 'task_unassigned';
