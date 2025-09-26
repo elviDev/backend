@@ -466,6 +466,43 @@ class APIServer {
         });
       }
     });
+
+    // WebSocket connection monitoring endpoint
+    this.app.get('/health/websocket', async (request, reply) => {
+      try {
+        const connectionDetails = socketManager.getConnectionDetails();
+        const metrics = socketManager.getMetrics();
+
+        reply.send({
+          status: 'ok',
+          timestamp: new Date().toISOString(),
+          websocket: {
+            server: {
+              isActive: socketManager.getServer() !== null,
+              metrics: {
+                connections: metrics.connections,
+                disconnections: metrics.disconnections,
+                events: metrics.events,
+                errors: metrics.errors,
+                totalUsers: metrics.totalUsers,
+                rooms: metrics.rooms,
+              },
+            },
+            connections: {
+              total: connectionDetails.totalConnections,
+              users: connectionDetails.connectedUsers,
+            },
+            channelRooms: connectionDetails.channelRooms,
+          }
+        });
+      } catch (error) {
+        logger.error({ error }, 'WebSocket status check failed');
+        reply.code(500).send({
+          status: 'error',
+          message: 'Failed to check WebSocket status'
+        });
+      }
+    });
   }
 
   /**

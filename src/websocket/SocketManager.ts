@@ -5,7 +5,7 @@ import { redisManager } from '@config/redis';
 import { config } from '@config/index';
 import { logger, loggers, performanceLogger } from '@utils/logger';
 import { jwtService } from '@auth/jwt';
-import { userRepository } from '@db/index';
+import { userRepository, channelRepository } from '@db/index';
 import { WebSocketError, AuthenticationError, AuthorizationError, TokenExpiredError } from '@utils/errors';
 import { ISocketManager } from './types';
 
@@ -208,8 +208,22 @@ class SocketManager implements ISocketManager {
         socket.lastActivity = new Date();
 
         // Get user's channels for room management
-        // Note: This would need to be implemented in a channel service
-        socket.channelIds = []; // TODO: Get from channel service
+        try {
+          const userChannels = await channelRepository.findUserChannels(user.id, user.role);
+          socket.channelIds = userChannels.map(channel => channel.id);
+
+          loggers.websocket.debug?.({
+            userId: user.id,
+            channelCount: socket.channelIds.length,
+            channels: socket.channelIds,
+          }, 'User channels loaded for WebSocket connection');
+        } catch (error) {
+          loggers.websocket.warn?.({
+            error,
+            userId: user.id,
+          }, 'Failed to load user channels, setting empty array');
+          socket.channelIds = [];
+        }
 
         loggers.websocket.info?.(
           {
@@ -279,7 +293,7 @@ class SocketManager implements ISocketManager {
       }
 
       // Join user to their channels
-      if (socket.channelIds) {
+      if (socket.channelIds && socket.channelIds.length > 0) {
         for (const channelId of socket.channelIds) {
           await socket.join(`channel:${channelId}`);
 
@@ -288,7 +302,24 @@ class SocketManager implements ISocketManager {
             this.channelMembers.set(channelId, new Set());
           }
           this.channelMembers.get(channelId)!.add(socket.userId!);
+
+          loggers.websocket.debug?.({
+            socketId: socket.id,
+            userId: socket.userId,
+            channelId,
+          }, 'User joined channel room');
         }
+
+        loggers.websocket.info?.({
+          socketId: socket.id,
+          userId: socket.userId,
+          joinedChannels: socket.channelIds.length,
+        }, 'User automatically joined to channel rooms');
+      } else {
+        loggers.websocket.info?.({
+          socketId: socket.id,
+          userId: socket.userId,
+        }, 'User has no channels to join');
       }
 
       loggers.websocket.info?.(
@@ -411,10 +442,22 @@ class SocketManager implements ISocketManager {
     if (socket.userId) {
       this.connectedUsers.delete(socket.userId);
 
-      // Remove from channel membership tracking
+      // Remove from channel membership tracking and notify channel members
       for (const [channelId, members] of this.channelMembers.entries()) {
         if (members.has(socket.userId)) {
           members.delete(socket.userId);
+
+          // Notify remaining channel members
+          socket.to(`channel:${channelId}`).emit('user_left_channel', {
+            type: 'user_disconnected_from_channel',
+            channelId,
+            userId: socket.userId,
+            userName: socket.userName,
+            userRole: socket.userRole,
+            reason: 'disconnected',
+            timestamp: new Date().toISOString(),
+          });
+
           if (members.size === 0) {
             this.channelMembers.delete(channelId);
           }
@@ -431,8 +474,10 @@ class SocketManager implements ISocketManager {
       {
         socketId: socket.id,
         userId: socket.userId,
+        userRole: socket.userRole,
         reason,
         totalConnections: this.connectedUsers.size,
+        channelsLeft: socket.channelIds?.length || 0,
       },
       'WebSocket client disconnected'
     );
@@ -443,14 +488,39 @@ class SocketManager implements ISocketManager {
    */
   private async handleJoinChannel(socket: AuthenticatedSocket, channelId: string): Promise<void> {
     try {
-      // TODO: Verify user has access to channel
-      // const hasAccess = await channelService.canUserAccess(channelId, socket.userId);
-      // if (!hasAccess) {
-      //   socket.emit('error', { message: 'Access denied to channel' });
-      //   return;
-      // }
+      // Verify user has access to channel
+      const hasAccess = await this.canUserAccessChannel(channelId, socket.userId!, socket.userRole!);
+      if (!hasAccess) {
+        loggers.websocket.warn?.(
+          {
+            socketId: socket.id,
+            userId: socket.userId,
+            channelId,
+            userRole: socket.userRole,
+          },
+          'User denied access to channel'
+        );
+        socket.emit('error', {
+          type: 'channel_access_denied',
+          message: 'Access denied to channel',
+          channelId
+        });
+        return;
+      }
 
-      await socket.join(`channel:${channelId}`);
+      // Check if user is already in the channel room
+      const socketRooms = Array.from(socket.rooms);
+      const channelRoom = `channel:${channelId}`;
+      if (socketRooms.includes(channelRoom)) {
+        socket.emit('channel_joined', {
+          channelId,
+          memberCount: this.channelMembers.get(channelId)?.size || 0,
+          message: 'Already in channel',
+        });
+        return;
+      }
+
+      await socket.join(channelRoom);
 
       // Track membership
       if (!this.channelMembers.has(channelId)) {
@@ -458,11 +528,18 @@ class SocketManager implements ISocketManager {
       }
       this.channelMembers.get(channelId)!.add(socket.userId!);
 
+      // Update socket's channel list
+      if (!socket.channelIds!.includes(channelId)) {
+        socket.channelIds!.push(channelId);
+      }
+
       // Notify channel members
-      socket.to(`channel:${channelId}`).emit('user_joined_channel', {
+      socket.to(channelRoom).emit('user_joined_channel', {
+        type: 'user_joined_channel',
         channelId,
         userId: socket.userId,
         userName: socket.userName,
+        userRole: socket.userRole,
         timestamp: new Date().toISOString(),
       });
 
@@ -472,20 +549,25 @@ class SocketManager implements ISocketManager {
         memberCount: this.channelMembers.get(channelId)?.size || 0,
       });
 
-      loggers.websocket.debug?.(
+      loggers.websocket.info?.(
         {
           socketId: socket.id,
           userId: socket.userId,
           channelId,
+          memberCount: this.channelMembers.get(channelId)?.size || 0,
         },
-        'User joined channel'
+        'User joined channel successfully'
       );
     } catch (error) {
       loggers.websocket.error?.(
         { error, socketId: socket.id, channelId },
         'Failed to join channel'
       );
-      socket.emit('error', { message: 'Failed to join channel' });
+      socket.emit('error', {
+        type: 'join_channel_error',
+        message: 'Failed to join channel',
+        channelId
+      });
     }
   }
 
@@ -494,7 +576,19 @@ class SocketManager implements ISocketManager {
    */
   private async handleLeaveChannel(socket: AuthenticatedSocket, channelId: string): Promise<void> {
     try {
-      await socket.leave(`channel:${channelId}`);
+      const channelRoom = `channel:${channelId}`;
+
+      // Check if user is actually in the channel room
+      const socketRooms = Array.from(socket.rooms);
+      if (!socketRooms.includes(channelRoom)) {
+        socket.emit('channel_left', {
+          channelId,
+          message: 'Not in channel',
+        });
+        return;
+      }
+
+      await socket.leave(channelRoom);
 
       // Update membership tracking
       const members = this.channelMembers.get(channelId);
@@ -505,29 +599,48 @@ class SocketManager implements ISocketManager {
         }
       }
 
-      // Notify channel members
-      socket.to(`channel:${channelId}`).emit('user_left_channel', {
+      // Update socket's channel list
+      if (socket.channelIds) {
+        const index = socket.channelIds.indexOf(channelId);
+        if (index > -1) {
+          socket.channelIds.splice(index, 1);
+        }
+      }
+
+      // Notify remaining channel members
+      socket.to(channelRoom).emit('user_left_channel', {
+        type: 'user_left_channel',
         channelId,
         userId: socket.userId,
         userName: socket.userName,
+        userRole: socket.userRole,
         timestamp: new Date().toISOString(),
       });
 
-      socket.emit('channel_left', { channelId });
+      socket.emit('channel_left', {
+        channelId,
+        memberCount: this.channelMembers.get(channelId)?.size || 0,
+      });
 
-      loggers.websocket.debug?.(
+      loggers.websocket.info?.(
         {
           socketId: socket.id,
           userId: socket.userId,
           channelId,
+          remainingMembers: this.channelMembers.get(channelId)?.size || 0,
         },
-        'User left channel'
+        'User left channel successfully'
       );
     } catch (error) {
       loggers.websocket.error?.(
         { error, socketId: socket.id, channelId },
         'Failed to leave channel'
       );
+      socket.emit('error', {
+        type: 'leave_channel_error',
+        message: 'Failed to leave channel',
+        channelId
+      });
     }
   }
 
@@ -868,6 +981,34 @@ class SocketManager implements ISocketManager {
   }
 
   /**
+   * Get detailed connection info for debugging
+   */
+  getConnectionDetails(): {
+    totalConnections: number;
+    connectedUsers: { userId: string; socketId: string; channelCount: number; channels: string[] }[];
+    channelRooms: { channelId: string; memberCount: number; members: string[] }[];
+  } {
+    const connectedUsers = Array.from(this.connectedUsers.entries()).map(([userId, socket]) => ({
+      userId,
+      socketId: socket.id,
+      channelCount: socket.channelIds?.length || 0,
+      channels: socket.channelIds || [],
+    }));
+
+    const channelRooms = Array.from(this.channelMembers.entries()).map(([channelId, members]) => ({
+      channelId,
+      memberCount: members.size,
+      members: Array.from(members),
+    }));
+
+    return {
+      totalConnections: this.connectedUsers.size,
+      connectedUsers,
+      channelRooms,
+    };
+  }
+
+  /**
    * Check if user is online
    */
   isUserOnline(userId: string): boolean {
@@ -893,6 +1034,54 @@ class SocketManager implements ISocketManager {
    */
   getServer(): SocketIOServer | null {
     return this.io;
+  }
+
+  /**
+   * Check if user can access a channel
+   */
+  private async canUserAccessChannel(channelId: string, userId: string, userRole: string): Promise<boolean> {
+    try {
+      // CEO can access all channels
+      if (userRole === 'ceo') {
+        return true;
+      }
+
+      // Check if channel exists and user has access
+      const channel = await channelRepository.findById(channelId);
+      if (!channel || channel.deleted_at) {
+        return false;
+      }
+
+      // Check if user is in the channel members list
+      if (channel.members.includes(userId)) {
+        return true;
+      }
+
+      // Check if user is a moderator
+      if (channel.moderators.includes(userId)) {
+        return true;
+      }
+
+      // Check if user is the owner
+      if (channel.owned_by === userId || channel.created_by === userId) {
+        return true;
+      }
+
+      // For public channels, managers can join
+      if (channel.privacy_level === 'public' && userRole === 'manager') {
+        return true;
+      }
+
+      // Check auto-join roles
+      if (channel.auto_join_roles.includes(userRole)) {
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      loggers.websocket.error?.({ error, channelId, userId }, 'Error checking channel access');
+      return false;
+    }
   }
 
   /**
