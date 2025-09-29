@@ -646,13 +646,24 @@ class APIServer {
       try {
         await redisManager.initialize();
         
-        // Start Redis memory monitoring for 25MB limit
-        redisMemoryManager.startMonitoring();
+        // Only start monitoring if Redis is actually connected
+        if (redisManager.isRedisConnected()) {
+          redisMemoryManager.startMonitoring();
+        }
         
         services.push({ name: 'Redis', status: true, duration: redisTimer.end() });
       } catch (error) {
         services.push({ name: 'Redis', status: false, duration: redisTimer.end() });
-        throw error;
+        
+        // Check if we should continue without Redis
+        const isConnectionError = error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED';
+        const isDevelopment = process.env.NODE_ENV !== 'production';
+        
+        if (isConnectionError && isDevelopment) {
+          logger.warn('Continuing server startup without Redis cache');
+        } else {
+          throw error;
+        }
       }
 
       // Initialize WebSocket server

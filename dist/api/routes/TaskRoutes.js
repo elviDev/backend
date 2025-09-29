@@ -1717,6 +1717,9 @@ const registerTaskRoutes = async (fastify) => {
                     await utils_1.WebSocketUtils.broadcastTaskUpdate({
                         type: 'comment_created',
                         taskId,
+                        userId: request.user.userId,
+                        userName: request.user.name || 'Unknown User',
+                        userRole: request.user.role,
                         commentId: comment.id,
                         data: commentWithDetails,
                         authorId: request.user.userId,
@@ -1728,12 +1731,14 @@ const registerTaskRoutes = async (fastify) => {
                         await utils_1.WebSocketUtils.broadcastChannelMessage({
                             type: 'task_comment',
                             channelId: task.channel_id,
+                            userId: request.user.userId,
+                            userName: request.user.name || 'Unknown User',
+                            userRole: request.user.role,
                             taskId,
                             commentId: comment.id,
                             message: `New comment on task "${task.title}": ${content.substring(0, 100)}${content.length > 100 ? '...' : ''}`,
                             authorId: request.user.userId,
                             authorName: request.user.name || 'Unknown User',
-                            timestamp: new Date().toISOString(),
                         });
                     }
                 }
@@ -1815,6 +1820,9 @@ const registerTaskRoutes = async (fastify) => {
                     await utils_1.WebSocketUtils.broadcastTaskUpdate({
                         type: 'comment_updated',
                         taskId,
+                        userId: request.user.userId,
+                        userName: request.user.name || 'Unknown User',
+                        userRole: request.user.role,
                         commentId,
                         data: updatedComment,
                         authorId: request.user.userId,
@@ -1826,12 +1834,14 @@ const registerTaskRoutes = async (fastify) => {
                         await utils_1.WebSocketUtils.broadcastChannelMessage({
                             type: 'task_comment_updated',
                             channelId: task.channel_id,
+                            userId: request.user.userId,
+                            userName: request.user.name || 'Unknown User',
+                            userRole: request.user.role,
                             taskId,
                             commentId,
                             message: `Comment updated on task "${task.title}"`,
                             authorId: request.user.userId,
                             authorName: request.user.name || 'Unknown User',
-                            timestamp: new Date().toISOString(),
                         });
                     }
                 }
@@ -1917,6 +1927,9 @@ const registerTaskRoutes = async (fastify) => {
                     await utils_1.WebSocketUtils.broadcastTaskUpdate({
                         type: 'comment_deleted',
                         taskId,
+                        userId: request.user.userId,
+                        userName: request.user.name || 'Unknown User',
+                        userRole: request.user.role,
                         commentId,
                         authorId: request.user.userId,
                         authorName: request.user.name || 'Unknown User',
@@ -1927,12 +1940,14 @@ const registerTaskRoutes = async (fastify) => {
                         await utils_1.WebSocketUtils.broadcastChannelMessage({
                             type: 'task_comment_deleted',
                             channelId: task.channel_id,
+                            userId: request.user.userId,
+                            userName: request.user.name || 'Unknown User',
+                            userRole: request.user.role,
                             taskId,
                             commentId,
                             message: `Comment deleted from task "${task.title}"`,
                             authorId: request.user.userId,
                             authorName: request.user.name || 'Unknown User',
-                            timestamp: new Date().toISOString(),
                         });
                     }
                 }

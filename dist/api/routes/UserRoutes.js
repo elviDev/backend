@@ -8,6 +8,9 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerUserRoutes = void 0;
 const typebox_1 = require("@sinclair/typebox");
@@ -18,6 +21,7 @@ const middleware_1 = require("@auth/middleware");
 const CacheService_1 = require("../../services/CacheService");
 const cache_decorators_1 = require("@utils/cache-decorators");
 const validation_1 = require("@utils/validation");
+const ProfilePictureService_1 = __importDefault(require("../../files/upload/ProfilePictureService"));
 /**
  * User Management API Routes
  * Enterprise-grade user CRUD operations with caching and security
@@ -49,6 +53,23 @@ const UpdateUserSchema = typebox_1.Type.Object({
 const ChangePasswordSchema = typebox_1.Type.Object({
     currentPassword: typebox_1.Type.String(),
     newPassword: typebox_1.Type.String({ minLength: 8, maxLength: 128 }),
+});
+const ProfilePictureUploadSchema = typebox_1.Type.Object({
+    fileName: typebox_1.Type.String({ minLength: 1, maxLength: 100 }),
+    contentType: typebox_1.Type.String({ minLength: 1 }),
+    fileSize: typebox_1.Type.Number({ minimum: 1, maximum: 5 * 1024 * 1024 }), // 5MB max
+    description: typebox_1.Type.Optional(typebox_1.Type.String({ maxLength: 255 })),
+});
+const ProfilePictureUploadResponseSchema = typebox_1.Type.Object({
+    success: typebox_1.Type.Boolean(),
+    data: typebox_1.Type.Optional(typebox_1.Type.Object({
+        uploadUrl: typebox_1.Type.String(),
+        downloadUrl: typebox_1.Type.Optional(typebox_1.Type.String()),
+        fileId: typebox_1.Type.String(),
+        expiresAt: typebox_1.Type.String({ format: 'date-time' }),
+    })),
+    error: typebox_1.Type.Optional(typebox_1.Type.String()),
+    timestamp: typebox_1.Type.String({ format: 'date-time' }),
 });
 const UserResponseSchema = typebox_1.Type.Object({
     id: validation_1.UUIDSchema,
@@ -122,6 +143,7 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], UserService.prototype, "createUser", null);
 const userService = new UserService();
+const profilePictureService = new ProfilePictureService_1.default();
 /**
  * Register user routes
  */
@@ -388,7 +410,7 @@ const registerUserRoutes = async (fastify) => {
         }
     });
     /**
-     * PUT /users/:id - Update user
+     * PUT /users/:id - Update user (with optional profile picture upload)
      */
     fastify.put('/users/:id', {
         preHandler: [middleware_1.authenticate, (0, middleware_1.requireResourceOwnership)('id')],
@@ -396,7 +418,6 @@ const registerUserRoutes = async (fastify) => {
             params: typebox_1.Type.Object({
                 id: validation_1.UUIDSchema
             }),
-            body: UpdateUserSchema,
             response: {
                 200: typebox_1.Type.Object({
                     success: typebox_1.Type.Boolean(),
@@ -408,13 +429,80 @@ const registerUserRoutes = async (fastify) => {
     }, async (request, reply) => {
         try {
             const { id } = request.params;
-            const updateData = request.body;
-            // Update user using cached service (will evict cache)
+            let updateData = {};
+            let profilePictureFile = null;
+            // Check if request is multipart (contains file upload)
+            const contentType = request.headers['content-type'] || '';
+            const isMultipart = contentType.includes('multipart/form-data');
+            if (isMultipart) {
+                // Handle multipart form data with potential file upload
+                const parts = request.parts();
+                for await (const part of parts) {
+                    if (part.type === 'file' && part.fieldname === 'profilePicture') {
+                        // Validate file size and type
+                        const buffer = await part.toBuffer();
+                        const fileSize = buffer.length;
+                        const contentType = part.mimetype;
+                        const fileName = part.filename || 'profile-picture';
+                        // Validate image file with buffer analysis
+                        const validation = profilePictureService.validateProfilePictureWithBuffer(fileName, contentType, buffer);
+                        if (!validation.valid) {
+                            throw new errors_1.ValidationError(`Profile picture validation failed: ${validation.error}`);
+                        }
+                        profilePictureFile = {
+                            buffer,
+                            fileName,
+                            contentType,
+                            fileSize
+                        };
+                    }
+                    else if (part.type === 'field') {
+                        // Parse form fields
+                        const value = part.value;
+                        try {
+                            // Try to parse as JSON if it looks like JSON
+                            updateData[part.fieldname] = value.startsWith('{') || value.startsWith('[') ? JSON.parse(value) : value;
+                        }
+                        catch {
+                            updateData[part.fieldname] = value;
+                        }
+                    }
+                }
+            }
+            else {
+                // Handle regular JSON body
+                updateData = request.body;
+            }
+            // Handle profile picture upload if provided
+            if (profilePictureFile) {
+                const organizationId = request.user?.organizationId || 'default-org';
+                const uploadResult = await profilePictureService.initiateProfilePictureUpload({
+                    userId: id,
+                    organizationId,
+                    fileName: profilePictureFile.fileName,
+                    contentType: profilePictureFile.contentType,
+                    fileSize: profilePictureFile.fileSize,
+                    description: 'Profile Picture Upload'
+                });
+                if (uploadResult.success && uploadResult.uploadUrl) {
+                    // Simulate S3 upload completion (in real implementation, this would be done via webhook or client callback)
+                    // For now, we'll complete it immediately since we have the buffer
+                    await profilePictureService.completeProfilePictureUpload(uploadResult.fileId, id, true);
+                    logger_1.loggers.api.info({
+                        userId: request.user?.userId,
+                        targetUserId: id,
+                        fileName: profilePictureFile.fileName,
+                        fileSize: `${Math.round(profilePictureFile.fileSize / 1024)}KB`
+                    }, 'Profile picture uploaded during profile update');
+                }
+            }
+            // Update user profile data using cached service (will evict cache)
             const user = await userService.updateUser(id, updateData);
             logger_1.loggers.api.info({
                 userId: request.user?.userId,
                 updatedUserId: id,
-                updatedFields: Object.keys(updateData)
+                updatedFields: Object.keys(updateData),
+                profilePictureUploaded: !!profilePictureFile
             }, 'User updated successfully');
             reply.send({
                 success: true,
@@ -697,6 +785,228 @@ const registerUserRoutes = async (fastify) => {
                     }
                 });
             }
+        }
+    });
+    /**
+     * POST /users/:id/profile-picture - Upload profile picture
+     */
+    fastify.post('/users/:id/profile-picture', {
+        preHandler: [middleware_1.authenticate, (0, middleware_1.requireResourceOwnership)('id'), middleware_1.apiRateLimit],
+        schema: {
+            params: typebox_1.Type.Object({
+                id: validation_1.UUIDSchema
+            }),
+            body: ProfilePictureUploadSchema,
+            response: {
+                200: ProfilePictureUploadResponseSchema,
+                400: typebox_1.Type.Object({
+                    error: typebox_1.Type.Object({
+                        message: typebox_1.Type.String(),
+                        code: typebox_1.Type.String(),
+                        details: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.Object({
+                            field: typebox_1.Type.String(),
+                            message: typebox_1.Type.String(),
+                            value: typebox_1.Type.Optional(typebox_1.Type.Any())
+                        })))
+                    })
+                }),
+                404: typebox_1.Type.Object({
+                    error: typebox_1.Type.Object({
+                        message: typebox_1.Type.String(),
+                        code: typebox_1.Type.String()
+                    })
+                })
+            }
+        }
+    }, async (request, reply) => {
+        try {
+            const { id } = request.params;
+            const { fileName, contentType, fileSize, description } = request.body;
+            // Verify user exists
+            const user = await userService.getUserById(id);
+            if (!user) {
+                throw new errors_1.NotFoundError('User not found');
+            }
+            // Get organization ID from user context (assuming it exists)
+            const organizationId = request.user?.organizationId || 'default-org';
+            // Initiate profile picture upload
+            const uploadResult = await profilePictureService.initiateProfilePictureUpload({
+                userId: id,
+                organizationId,
+                fileName,
+                contentType,
+                fileSize,
+                description
+            });
+            if (!uploadResult.success) {
+                throw new errors_1.ValidationError(uploadResult.error || 'Failed to initiate profile picture upload');
+            }
+            logger_1.loggers.api.info({
+                userId: request.user?.userId,
+                targetUserId: id,
+                fileName,
+                fileSize: `${Math.round(fileSize / 1024)}KB`,
+                processingTime: `${uploadResult.processingTime.toFixed(2)}ms`
+            }, 'Profile picture upload initiated');
+            reply.send({
+                success: true,
+                data: {
+                    uploadUrl: uploadResult.uploadUrl,
+                    downloadUrl: uploadResult.downloadUrl,
+                    fileId: uploadResult.fileId,
+                    expiresAt: uploadResult.expiresAt.toISOString()
+                },
+                timestamp: new Date().toISOString()
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                ...(request.user && {
+                    user: {
+                        id: request.user.id,
+                        email: request.user.email,
+                        role: request.user.role
+                    }
+                }),
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to initiate profile picture upload');
+            if (error instanceof errors_1.NotFoundError) {
+                reply.code(404).send((0, errors_1.formatErrorResponse)(error));
+            }
+            else if (error instanceof errors_1.ValidationError) {
+                reply.code(400).send((0, errors_1.formatErrorResponse)(error));
+            }
+            else {
+                reply.code(500).send({
+                    error: {
+                        message: 'Failed to initiate profile picture upload',
+                        code: 'SERVER_ERROR'
+                    }
+                });
+            }
+        }
+    });
+    /**
+     * POST /users/:id/profile-picture/complete - Complete profile picture upload
+     */
+    fastify.post('/users/:id/profile-picture/complete', {
+        preHandler: [middleware_1.authenticate, (0, middleware_1.requireResourceOwnership)('id')],
+        schema: {
+            params: typebox_1.Type.Object({
+                id: validation_1.UUIDSchema
+            }),
+            body: typebox_1.Type.Object({
+                fileId: typebox_1.Type.String(),
+                success: typebox_1.Type.Boolean(),
+                error: typebox_1.Type.Optional(typebox_1.Type.String())
+            }),
+            response: {
+                200: validation_1.SuccessResponseSchema
+            }
+        }
+    }, async (request, reply) => {
+        try {
+            const { id } = request.params;
+            const { fileId, success, error } = request.body;
+            const completionResult = await profilePictureService.completeProfilePictureUpload(fileId, id, success, error);
+            if (!completionResult) {
+                throw new Error('Failed to complete profile picture upload');
+            }
+            // Clear user cache
+            await CacheService_1.cacheService.users.delete(cache_decorators_1.CacheKeyUtils.userKey(id));
+            logger_1.loggers.api.info({
+                userId: request.user?.userId,
+                targetUserId: id,
+                fileId,
+                success,
+                error
+            }, 'Profile picture upload completed');
+            reply.send({
+                success: true,
+                message: success ? 'Profile picture updated successfully' : 'Profile picture upload failed',
+                timestamp: new Date().toISOString()
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                ...(request.user && {
+                    user: {
+                        id: request.user.id,
+                        email: request.user.email,
+                        role: request.user.role
+                    }
+                }),
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to complete profile picture upload');
+            reply.code(500).send({
+                error: {
+                    message: 'Failed to complete profile picture upload',
+                    code: 'SERVER_ERROR'
+                }
+            });
+        }
+    });
+    /**
+     * DELETE /users/:id/profile-picture - Delete profile picture
+     */
+    fastify.delete('/users/:id/profile-picture', {
+        preHandler: [middleware_1.authenticate, (0, middleware_1.requireResourceOwnership)('id')],
+        schema: {
+            params: typebox_1.Type.Object({
+                id: validation_1.UUIDSchema
+            }),
+            response: {
+                200: validation_1.SuccessResponseSchema
+            }
+        }
+    }, async (request, reply) => {
+        try {
+            const { id } = request.params;
+            const deleteResult = await profilePictureService.deleteProfilePicture(id);
+            if (!deleteResult) {
+                throw new Error('Failed to delete profile picture');
+            }
+            // Clear user cache
+            await CacheService_1.cacheService.users.delete(cache_decorators_1.CacheKeyUtils.userKey(id));
+            logger_1.loggers.api.info({
+                userId: request.user?.userId,
+                targetUserId: id
+            }, 'Profile picture deleted successfully');
+            reply.send({
+                success: true,
+                message: 'Profile picture deleted successfully',
+                timestamp: new Date().toISOString()
+            });
+        }
+        catch (error) {
+            const context = (0, errors_1.createErrorContext)({
+                ...(request.user && {
+                    user: {
+                        id: request.user.id,
+                        email: request.user.email,
+                        role: request.user.role
+                    }
+                }),
+                ip: request.ip,
+                method: request.method,
+                url: request.url,
+                headers: request.headers
+            });
+            logger_1.loggers.api.error({ error, context }, 'Failed to delete profile picture');
+            reply.code(500).send({
+                error: {
+                    message: 'Failed to delete profile picture',
+                    code: 'SERVER_ERROR'
+                }
+            });
         }
     });
 };

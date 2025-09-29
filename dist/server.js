@@ -441,6 +441,42 @@ class APIServer {
                 });
             }
         });
+        // WebSocket connection monitoring endpoint
+        this.app.get('/health/websocket', async (request, reply) => {
+            try {
+                const connectionDetails = SocketManager_1.socketManager.getConnectionDetails();
+                const metrics = SocketManager_1.socketManager.getMetrics();
+                reply.send({
+                    status: 'ok',
+                    timestamp: new Date().toISOString(),
+                    websocket: {
+                        server: {
+                            isActive: SocketManager_1.socketManager.getServer() !== null,
+                            metrics: {
+                                connections: metrics.connections,
+                                disconnections: metrics.disconnections,
+                                events: metrics.events,
+                                errors: metrics.errors,
+                                totalUsers: metrics.totalUsers,
+                                rooms: metrics.rooms,
+                            },
+                        },
+                        connections: {
+                            total: connectionDetails.totalConnections,
+                            users: connectionDetails.connectedUsers,
+                        },
+                        channelRooms: connectionDetails.channelRooms,
+                    }
+                });
+            }
+            catch (error) {
+                logger_1.logger.error({ error }, 'WebSocket status check failed');
+                reply.code(500).send({
+                    status: 'error',
+                    message: 'Failed to check WebSocket status'
+                });
+            }
+        });
     }
     /**
      * Register application routes
@@ -555,13 +591,23 @@ class APIServer {
             const redisTimer = logger_1.startupLogger.createTimer('Redis');
             try {
                 await redis_1.redisManager.initialize();
-                // Start Redis memory monitoring for 25MB limit
-                RedisMemoryManager_1.redisMemoryManager.startMonitoring();
+                // Only start monitoring if Redis is actually connected
+                if (redis_1.redisManager.isRedisConnected()) {
+                    RedisMemoryManager_1.redisMemoryManager.startMonitoring();
+                }
                 services.push({ name: 'Redis', status: true, duration: redisTimer.end() });
             }
             catch (error) {
                 services.push({ name: 'Redis', status: false, duration: redisTimer.end() });
-                throw error;
+                // Check if we should continue without Redis
+                const isConnectionError = error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED';
+                const isDevelopment = process.env.NODE_ENV !== 'production';
+                if (isConnectionError && isDevelopment) {
+                    logger_1.logger.warn('Continuing server startup without Redis cache');
+                }
+                else {
+                    throw error;
+                }
             }
             // Initialize WebSocket server
             const wsTimer = logger_1.startupLogger.createTimer('WebSocket Server');

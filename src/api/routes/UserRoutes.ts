@@ -25,6 +25,7 @@ import {
   PaginationSchema,
   SuccessResponseSchema 
 } from '@utils/validation';
+import ProfilePictureService from '../../files/upload/ProfilePictureService';
 
 /**
  * User Management API Routes
@@ -60,6 +61,25 @@ const UpdateUserSchema = Type.Object({
 const ChangePasswordSchema = Type.Object({
   currentPassword: Type.String(),
   newPassword: Type.String({ minLength: 8, maxLength: 128 }),
+});
+
+const ProfilePictureUploadSchema = Type.Object({
+  fileName: Type.String({ minLength: 1, maxLength: 100 }),
+  contentType: Type.String({ minLength: 1 }),
+  fileSize: Type.Number({ minimum: 1, maximum: 5 * 1024 * 1024 }), // 5MB max
+  description: Type.Optional(Type.String({ maxLength: 255 })),
+});
+
+const ProfilePictureUploadResponseSchema = Type.Object({
+  success: Type.Boolean(),
+  data: Type.Optional(Type.Object({
+    uploadUrl: Type.String(),
+    downloadUrl: Type.Optional(Type.String()),
+    fileId: Type.String(),
+    expiresAt: Type.String({ format: 'date-time' }),
+  })),
+  error: Type.Optional(Type.String()),
+  timestamp: Type.String({ format: 'date-time' }),
 });
 
 const UserResponseSchema = Type.Object({
@@ -124,6 +144,7 @@ class UserService {
 }
 
 const userService = new UserService();
+const profilePictureService = new ProfilePictureService();
 
 /**
  * Register user routes
@@ -418,18 +439,16 @@ export const registerUserRoutes = async (fastify: FastifyInstance) => {
   });
 
   /**
-   * PUT /users/:id - Update user
+   * PUT /users/:id - Update user (with optional profile picture upload)
    */
   fastify.put<{
     Params: { id: string };
-    Body: typeof UpdateUserSchema.static
   }>('/users/:id', {
     preHandler: [authenticate, requireResourceOwnership('id')],
     schema: {
       params: Type.Object({
         id: UUIDSchema
       }),
-      body: UpdateUserSchema,
       response: {
         200: Type.Object({
           success: Type.Boolean(),
@@ -441,15 +460,94 @@ export const registerUserRoutes = async (fastify: FastifyInstance) => {
   }, async (request, reply) => {
     try {
       const { id } = request.params;
-      const updateData = request.body;
+      let updateData: any = {};
+      let profilePictureFile: any = null;
 
-      // Update user using cached service (will evict cache)
+      // Check if request is multipart (contains file upload)
+      const contentType = request.headers['content-type'] || '';
+      const isMultipart = contentType.includes('multipart/form-data');
+
+      if (isMultipart) {
+        // Handle multipart form data with potential file upload
+        const parts = request.parts();
+        
+        for await (const part of parts) {
+          if (part.type === 'file' && part.fieldname === 'profilePicture') {
+            // Validate file size and type
+            const buffer = await part.toBuffer();
+            const fileSize = buffer.length;
+            const contentType = part.mimetype;
+            const fileName = part.filename || 'profile-picture';
+
+            // Validate image file with buffer analysis
+            const validation = profilePictureService.validateProfilePictureWithBuffer(fileName, contentType, buffer);
+            if (!validation.valid) {
+              throw new ValidationError(`Profile picture validation failed: ${validation.error}`, [
+                { field: 'profilePicture', message: validation.error || 'Invalid profile picture' }
+              ]);
+            }
+
+            profilePictureFile = {
+              buffer,
+              fileName,
+              contentType,
+              fileSize
+            };
+          } else if (part.type === 'field') {
+            // Parse form fields
+            const value = (part as any).value;
+            try {
+              // Try to parse as JSON if it looks like JSON
+              updateData[part.fieldname] = value.startsWith('{') || value.startsWith('[') ? JSON.parse(value) : value;
+            } catch {
+              updateData[part.fieldname] = value;
+            }
+          }
+        }
+      } else {
+        // Handle regular JSON body
+        updateData = request.body as any;
+      }
+
+      // Handle profile picture upload if provided
+      if (profilePictureFile) {
+        const organizationId = (request.user as any)?.organizationId || 'default-org';
+        
+        const uploadResult = await profilePictureService.initiateProfilePictureUpload({
+          userId: id,
+          organizationId,
+          fileName: profilePictureFile.fileName,
+          contentType: profilePictureFile.contentType,
+          fileSize: profilePictureFile.fileSize,
+          description: 'Profile Picture Upload'
+        });
+
+        if (uploadResult.success && uploadResult.uploadUrl) {
+          // Simulate S3 upload completion (in real implementation, this would be done via webhook or client callback)
+          // For now, we'll complete it immediately since we have the buffer
+          await profilePictureService.completeProfilePictureUpload(
+            uploadResult.fileId!,
+            id,
+            true
+          );
+          
+          loggers.api.info({
+            userId: request.user?.userId,
+            targetUserId: id,
+            fileName: profilePictureFile.fileName,
+            fileSize: `${Math.round(profilePictureFile.fileSize / 1024)}KB`
+          }, 'Profile picture uploaded during profile update');
+        }
+      }
+
+      // Update user profile data using cached service (will evict cache)
       const user = await userService.updateUser(id, updateData);
 
       loggers.api.info({
         userId: request.user?.userId,
         updatedUserId: id,
-        updatedFields: Object.keys(updateData)
+        updatedFields: Object.keys(updateData),
+        profilePictureUploaded: !!profilePictureFile
       }, 'User updated successfully');
 
       reply.send({
@@ -599,7 +697,9 @@ export const registerUserRoutes = async (fastify: FastifyInstance) => {
 
       // Prevent self-deletion
       if (id === request.user?.userId) {
-        throw new ValidationError('Cannot delete your own account', []);
+        throw new ValidationError('Cannot delete your own account', [
+          { field: 'userId', message: 'Self-deletion not allowed' }
+        ]);
       }
 
       const success = await userRepository.softDelete(id, request.user!.userId);
@@ -759,6 +859,268 @@ export const registerUserRoutes = async (fastify: FastifyInstance) => {
           }
         });
       }
+    }
+  });
+
+  /**
+   * POST /users/:id/profile-picture - Upload profile picture
+   */
+  fastify.post<{
+    Params: { id: string };
+    Body: typeof ProfilePictureUploadSchema.static
+  }>('/users/:id/profile-picture', {
+    preHandler: [authenticate, requireResourceOwnership('id'), apiRateLimit],
+    schema: {
+      params: Type.Object({
+        id: UUIDSchema
+      }),
+      body: ProfilePictureUploadSchema,
+      response: {
+        200: ProfilePictureUploadResponseSchema,
+        400: Type.Object({
+          error: Type.Object({
+            message: Type.String(),
+            code: Type.String(),
+            details: Type.Optional(Type.Array(Type.Object({
+              field: Type.String(),
+              message: Type.String(),
+              value: Type.Optional(Type.Any())
+            })))
+          })
+        }),
+        404: Type.Object({
+          error: Type.Object({
+            message: Type.String(),
+            code: Type.String()
+          })
+        })
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const { fileName, contentType, fileSize, description } = request.body;
+
+      // Verify user exists
+      const user = await userService.getUserById(id);
+      if (!user) {
+        throw new NotFoundError('User not found');
+      }
+
+      // Get organization ID from user context (assuming it exists)
+      // Note: This should be added to the TokenPayload interface if not present
+      const organizationId = (request.user as any)?.organizationId || 'default-org';
+
+      // Initiate profile picture upload
+      const uploadResult = await profilePictureService.initiateProfilePictureUpload({
+        userId: id,
+        organizationId,
+        fileName,
+        contentType,
+        fileSize,
+        description
+      });
+
+      if (!uploadResult.success) {
+        throw new ValidationError(uploadResult.error || 'Failed to initiate profile picture upload', [
+          { field: 'profilePicture', message: uploadResult.error || 'Upload initiation failed' }
+        ]);
+      }
+
+      loggers.api.info({
+        userId: request.user?.userId,
+        targetUserId: id,
+        fileName,
+        fileSize: `${Math.round(fileSize / 1024)}KB`,
+        processingTime: `${uploadResult.processingTime.toFixed(2)}ms`
+      }, 'Profile picture upload initiated');
+
+      reply.send({
+        success: true,
+        data: {
+          uploadUrl: uploadResult.uploadUrl!,
+          downloadUrl: uploadResult.downloadUrl,
+          fileId: uploadResult.fileId!,
+          expiresAt: uploadResult.expiresAt!.toISOString()
+        },
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      const context = createErrorContext({
+        ...(request.user && {
+          user: {
+            id: request.user.id,
+            email: request.user.email,
+            role: request.user.role
+          }
+        }),
+        ip: request.ip,
+        method: request.method,
+        url: request.url,
+        headers: request.headers as Record<string, string | string[] | undefined>
+      });
+      loggers.api.error({ error, context }, 'Failed to initiate profile picture upload');
+      
+      if (error instanceof NotFoundError) {
+        reply.code(404).send(formatErrorResponse(error));
+      } else if (error instanceof ValidationError) {
+        reply.code(400).send(formatErrorResponse(error));
+      } else {
+        reply.code(500).send({
+          error: {
+            message: 'Failed to initiate profile picture upload',
+            code: 'SERVER_ERROR'
+          }
+        });
+      }
+    }
+  });
+
+  /**
+   * POST /users/:id/profile-picture/complete - Complete profile picture upload
+   */
+  fastify.post<{
+    Params: { id: string };
+    Body: {
+      fileId: string;
+      success: boolean;
+      error?: string;
+    }
+  }>('/users/:id/profile-picture/complete', {
+    preHandler: [authenticate, requireResourceOwnership('id')],
+    schema: {
+      params: Type.Object({
+        id: UUIDSchema
+      }),
+      body: Type.Object({
+        fileId: Type.String(),
+        success: Type.Boolean(),
+        error: Type.Optional(Type.String())
+      }),
+      response: {
+        200: SuccessResponseSchema
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const { fileId, success, error } = request.body;
+
+      const completionResult = await profilePictureService.completeProfilePictureUpload(
+        fileId,
+        id,
+        success,
+        error
+      );
+
+      if (!completionResult) {
+        throw new Error('Failed to complete profile picture upload');
+      }
+
+      // Clear user cache
+      await cacheService.users.delete(CacheKeyUtils.userKey(id));
+
+      loggers.api.info({
+        userId: request.user?.userId,
+        targetUserId: id,
+        fileId,
+        success,
+        error
+      }, 'Profile picture upload completed');
+
+      reply.send({
+        success: true,
+        message: success ? 'Profile picture updated successfully' : 'Profile picture upload failed',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      const context = createErrorContext({
+        ...(request.user && {
+          user: {
+            id: request.user.id,
+            email: request.user.email,
+            role: request.user.role
+          }
+        }),
+        ip: request.ip,
+        method: request.method,
+        url: request.url,
+        headers: request.headers as Record<string, string | string[] | undefined>
+      });
+      loggers.api.error({ error, context }, 'Failed to complete profile picture upload');
+      
+      reply.code(500).send({
+        error: {
+          message: 'Failed to complete profile picture upload',
+          code: 'SERVER_ERROR'
+        }
+      });
+    }
+  });
+
+  /**
+   * DELETE /users/:id/profile-picture - Delete profile picture
+   */
+  fastify.delete<{
+    Params: { id: string }
+  }>('/users/:id/profile-picture', {
+    preHandler: [authenticate, requireResourceOwnership('id')],
+    schema: {
+      params: Type.Object({
+        id: UUIDSchema
+      }),
+      response: {
+        200: SuccessResponseSchema
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const { id } = request.params;
+
+      const deleteResult = await profilePictureService.deleteProfilePicture(id);
+
+      if (!deleteResult) {
+        throw new Error('Failed to delete profile picture');
+      }
+
+      // Clear user cache
+      await cacheService.users.delete(CacheKeyUtils.userKey(id));
+
+      loggers.api.info({
+        userId: request.user?.userId,
+        targetUserId: id
+      }, 'Profile picture deleted successfully');
+
+      reply.send({
+        success: true,
+        message: 'Profile picture deleted successfully',
+        timestamp: new Date().toISOString()
+      });
+
+    } catch (error) {
+      const context = createErrorContext({
+        ...(request.user && {
+          user: {
+            id: request.user.id,
+            email: request.user.email,
+            role: request.user.role
+          }
+        }),
+        ip: request.ip,
+        method: request.method,
+        url: request.url,
+        headers: request.headers as Record<string, string | string[] | undefined>
+      });
+      loggers.api.error({ error, context }, 'Failed to delete profile picture');
+      
+      reply.code(500).send({
+        error: {
+          message: 'Failed to delete profile picture',
+          code: 'SERVER_ERROR'
+        }
+      });
     }
   });
 };

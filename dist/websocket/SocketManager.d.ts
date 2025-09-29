@@ -131,6 +131,23 @@ declare class SocketManager implements ISocketManager {
      */
     getMetrics(): typeof this.metrics;
     /**
+     * Get detailed connection info for debugging
+     */
+    getConnectionDetails(): {
+        totalConnections: number;
+        connectedUsers: {
+            userId: string;
+            socketId: string;
+            channelCount: number;
+            channels: string[];
+        }[];
+        channelRooms: {
+            channelId: string;
+            memberCount: number;
+            members: string[];
+        }[];
+    };
+    /**
      * Check if user is online
      */
     isUserOnline(userId: string): boolean;
@@ -146,6 +163,10 @@ declare class SocketManager implements ISocketManager {
      * Get Socket.IO server instance
      */
     getServer(): SocketIOServer | null;
+    /**
+     * Check if user can access a channel
+     */
+    private canUserAccessChannel;
     /**
      * Close WebSocket server
      */

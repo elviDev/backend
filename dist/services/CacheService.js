@@ -103,6 +103,11 @@ class CacheService {
     async get(key, options = {}) {
         return await logger_1.performanceLogger.trackAsyncOperation(async () => {
             try {
+                // Check if Redis is available
+                if (!redis_1.redisManager.isRedisConnected()) {
+                    logger_1.loggers.cache.debug({ key }, 'Redis not available - cache miss');
+                    return null;
+                }
                 const client = redis_1.redisManager.getClient();
                 const cacheKey = this.generateKey(key, options.namespace);
                 const value = await client.get(cacheKey);
@@ -131,6 +136,11 @@ class CacheService {
     async set(key, value, options = {}) {
         return await logger_1.performanceLogger.trackAsyncOperation(async () => {
             try {
+                // Check if Redis is available
+                if (!redis_1.redisManager.isRedisConnected()) {
+                    logger_1.loggers.cache.debug({ key }, 'Redis not available - cache set skipped');
+                    return false;
+                }
                 const client = redis_1.redisManager.getClient();
                 const cacheKey = this.generateKey(key, options.namespace);
                 // Serialize and compress
@@ -174,6 +184,11 @@ class CacheService {
      */
     async delete(key, options = {}) {
         try {
+            // Check if Redis is available
+            if (!redis_1.redisManager.isRedisConnected()) {
+                logger_1.loggers.cache.debug({ key }, 'Redis not available - cache delete skipped');
+                return false;
+            }
             const client = redis_1.redisManager.getClient();
             const cacheKey = this.generateKey(key, options.namespace);
             const result = await client.del(cacheKey);

@@ -143,6 +143,12 @@ class CacheService {
     return await performanceLogger.trackAsyncOperation(
       async () => {
         try {
+          // Check if Redis is available
+          if (!redisManager.isRedisConnected()) {
+            loggers.cache.debug({ key }, 'Redis not available - cache miss');
+            return null;
+          }
+
           const client = redisManager.getClient();
           const cacheKey = this.generateKey(key, options.namespace);
 
@@ -180,6 +186,12 @@ class CacheService {
     return await performanceLogger.trackAsyncOperation(
       async () => {
         try {
+          // Check if Redis is available
+          if (!redisManager.isRedisConnected()) {
+            loggers.cache.debug({ key }, 'Redis not available - cache set skipped');
+            return false;
+          }
+
           const client = redisManager.getClient();
           const cacheKey = this.generateKey(key, options.namespace);
 
@@ -234,6 +246,12 @@ class CacheService {
    */
   async delete(key: string, options: CacheOptions = {}): Promise<boolean> {
     try {
+      // Check if Redis is available
+      if (!redisManager.isRedisConnected()) {
+        loggers.cache.debug({ key }, 'Redis not available - cache delete skipped');
+        return false;
+      }
+
       const client = redisManager.getClient();
       const cacheKey = this.generateKey(key, options.namespace);
 

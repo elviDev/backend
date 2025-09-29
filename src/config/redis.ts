@@ -122,6 +122,17 @@ class RedisManager {
       this.startMetricsCollection();
     } catch (error) {
       logger.error({ error }, 'Failed to initialize Redis connections');
+      
+      // Check if this is a connection error and if we should fail silently
+      const isConnectionError = error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED';
+      const isDevelopment = process.env.NODE_ENV !== 'production';
+      
+      if (isConnectionError && isDevelopment) {
+        logger.warn('Redis unavailable in development mode - continuing without cache');
+        this.isConnected = false;
+        return; // Continue without Redis
+      }
+      
       throw new CacheError('Redis initialization failed', { error });
     }
   }
