@@ -310,7 +310,9 @@ const registerTaskRoutes = async (fastify) => {
                 filters.overdue = overdue;
             if (voice_created !== undefined)
                 filters.voiceCreated = voice_created;
-            // Filter based on user permissions (non-CEO users only see their tasks unless specified)
+            // Apply role-based filtering consistently across all task endpoints
+            // CEO: sees all tasks
+            // Manager/Staff: only see tasks assigned to them (unless explicitly filtering by assigned_to or created_by)
             if (request.user.role !== 'ceo' && !assigned_to && !created_by) {
                 filters.assignedTo = [request.user.userId];
             }
@@ -1182,6 +1184,10 @@ const registerTaskRoutes = async (fastify) => {
                 priority,
                 assignedTo: assigned_to ? [assigned_to] : undefined,
             };
+            // Apply consistent role-based filtering (same as main /tasks endpoint)
+            if (request.user.role !== 'ceo' && !assigned_to) {
+                filters.assignedTo = [request.user.userId];
+            }
             const tasks = await index_1.taskRepository.findWithFiltersAndDetails(filters, Math.min(limit, 100), offset);
             const total = tasks.length; // Simplified - in production, implement proper count query
             logger_1.loggers.api.info({

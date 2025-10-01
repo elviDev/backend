@@ -26,6 +26,7 @@ class UserRepository extends BaseRepository_1.default {
             'notification_settings',
             'voice_settings',
             'email_verified',
+            'otp_attempts',
             'last_active',
             'last_login',
             'login_count',
@@ -61,6 +62,7 @@ class UserRepository extends BaseRepository_1.default {
             password_hash,
             email_verified: false,
             failed_login_attempts: 0,
+            otp_attempts: 0,
             login_count: 0,
             language_preference: userData.language_preference || 'en',
             timezone: userData.timezone || 'UTC',
@@ -280,6 +282,65 @@ class UserRepository extends BaseRepository_1.default {
         if (result.rows.length > 0 && result.rows[0]) {
             logger_1.logger.info({ userId: result.rows[0].id }, 'Email verified successfully');
         }
+        return result.rows[0] || null;
+    }
+    /**
+     * Set email verification OTP
+     */
+    async setEmailVerificationOTP(userId, otp, expiryDate, client) {
+        const sql = `
+      UPDATE ${this.tableName}
+      SET 
+        email_verification_otp = $2,
+        email_verification_otp_expires = $3,
+        otp_attempts = 0
+      WHERE id = $1 AND deleted_at IS NULL
+    `;
+        const result = await this.executeRawQuery(sql, [userId, otp, expiryDate], client);
+        return result.rowCount > 0;
+    }
+    /**
+     * Increment OTP attempts
+     */
+    async incrementOTPAttempts(userId, client) {
+        const sql = `
+      UPDATE ${this.tableName}
+      SET otp_attempts = otp_attempts + 1
+      WHERE id = $1 AND deleted_at IS NULL
+    `;
+        await this.executeRawQuery(sql, [userId], client);
+    }
+    /**
+     * Verify email with OTP
+     */
+    async verifyEmailWithOTP(userId, client) {
+        const sql = `
+      UPDATE ${this.tableName}
+      SET 
+        email_verified = true,
+        email_verification_otp = NULL,
+        email_verification_otp_expires = NULL,
+        otp_attempts = 0
+      WHERE id = $1 AND deleted_at IS NULL
+      RETURNING ${this.selectFields.join(', ')}
+    `;
+        const result = await this.executeRawQuery(sql, [userId], client);
+        if (result.rows.length > 0 && result.rows[0]) {
+            logger_1.logger.info({ userId: result.rows[0].id }, 'Email verified successfully with OTP');
+        }
+        return result.rows[0] || null;
+    }
+    /**
+     * Find user by email for OTP verification (includes OTP fields)
+     */
+    async findByEmailForOTP(email, client) {
+        const sql = `
+      SELECT id, email, name, role, email_verified, email_verification_otp,
+             email_verification_otp_expires, otp_attempts, version
+      FROM ${this.tableName}
+      WHERE LOWER(email) = LOWER($1) AND deleted_at IS NULL
+    `;
+        const result = await this.executeRawQuery(sql, [email], client);
         return result.rows[0] || null;
     }
     /**

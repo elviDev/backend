@@ -8,7 +8,14 @@
       "Bash(npx tsc:*)",
       "Bash(PGPASSWORD=ThisSuperColl psql -h database-1.cmze6s8yeur2.us-east-1.rds.amazonaws.com -U postgres -d postgres -c \"SELECT id, title FROM tasks LIMIT 3;\")",
       "Bash(chmod:*)",
-      "Bash(NODE_ENV=development npm run start)"
+      "Bash(NODE_ENV=development npm run start)",
+      "Bash(PGPASSWORD=ThisSuperColl psql -h database-1.cmze6s8yeur2.us-east-1.rds.amazonaws.com -U postgres -d postgres -c \"\\dt\")",
+      "Bash(PGPASSWORD=ThisSuperColl psql:*)",
+      "Bash(echo:*)",
+      "Bash(redis-cli:*)",
+      "Bash(find:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(npm install:*)"
     ],
     "deny": [],
     "ask": []

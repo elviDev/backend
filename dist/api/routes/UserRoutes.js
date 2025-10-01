@@ -447,7 +447,9 @@ const registerUserRoutes = async (fastify) => {
                         // Validate image file with buffer analysis
                         const validation = profilePictureService.validateProfilePictureWithBuffer(fileName, contentType, buffer);
                         if (!validation.valid) {
-                            throw new errors_1.ValidationError(`Profile picture validation failed: ${validation.error}`);
+                            throw new errors_1.ValidationError(`Profile picture validation failed: ${validation.error}`, [
+                                { field: 'profilePicture', message: validation.error || 'Invalid profile picture' }
+                            ]);
                         }
                         profilePictureFile = {
                             buffer,
@@ -638,7 +640,9 @@ const registerUserRoutes = async (fastify) => {
             const { id } = request.params;
             // Prevent self-deletion
             if (id === request.user?.userId) {
-                throw new errors_1.ValidationError('Cannot delete your own account', []);
+                throw new errors_1.ValidationError('Cannot delete your own account', [
+                    { field: 'userId', message: 'Self-deletion not allowed' }
+                ]);
             }
             const success = await index_1.userRepository.softDelete(id, request.user.userId);
             if (!success) {
@@ -828,6 +832,7 @@ const registerUserRoutes = async (fastify) => {
                 throw new errors_1.NotFoundError('User not found');
             }
             // Get organization ID from user context (assuming it exists)
+            // Note: This should be added to the TokenPayload interface if not present
             const organizationId = request.user?.organizationId || 'default-org';
             // Initiate profile picture upload
             const uploadResult = await profilePictureService.initiateProfilePictureUpload({
@@ -839,7 +844,9 @@ const registerUserRoutes = async (fastify) => {
                 description
             });
             if (!uploadResult.success) {
-                throw new errors_1.ValidationError(uploadResult.error || 'Failed to initiate profile picture upload');
+                throw new errors_1.ValidationError(uploadResult.error || 'Failed to initiate profile picture upload', [
+                    { field: 'profilePicture', message: uploadResult.error || 'Upload initiation failed' }
+                ]);
             }
             logger_1.loggers.api.info({
                 userId: request.user?.userId,

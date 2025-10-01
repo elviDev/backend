@@ -78,5 +78,5 @@ export declare class ImageValidator {
     private formatFileSize;
 }
 export declare const profilePictureValidator: ImageValidator;
-export { ImageValidator, ImageValidationOptions, ImageValidationResult, };
+export type { ImageValidationOptions, ImageValidationResult };
 //# sourceMappingURL=imageValidation.d.ts.map

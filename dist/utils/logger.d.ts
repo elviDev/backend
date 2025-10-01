@@ -30,7 +30,7 @@ export declare const securityLogger: {
     /**
      * Log authentication events
      */
-    logAuthEvent: (event: "login" | "logout" | "token_refresh" | "failed_login" | "login_attempt" | "registration_attempt" | "registration_success" | "password_reset_requested" | "password_reset" | "email_verified" | "token_generated" | "token_refreshed" | "authentication_success" | "refresh_token_expired" | "missing_token", context: {
+    logAuthEvent: (event: "login" | "logout" | "token_refresh" | "failed_login" | "login_attempt" | "registration_attempt" | "registration_success" | "password_reset_requested" | "password_reset" | "email_verified" | "token_generated" | "token_refreshed" | "authentication_success" | "refresh_token_expired" | "missing_token" | "otp_requested", context: {
         userId?: string;
         email?: string;
         ip?: string;

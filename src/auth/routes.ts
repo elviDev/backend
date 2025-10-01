@@ -13,6 +13,13 @@ import { authRateLimit } from './middleware';
 import { Type, Static } from '@sinclair/typebox';
 import crypto from 'crypto';
 import { emailService } from '@/services/EmailService';
+import { 
+  generateOTP, 
+  getOTPExpiry, 
+  validateOTPAttempt, 
+  hasExceededOTPAttempts,
+  OTP_CONFIG 
+} from '@utils/otp';
 
 /**
  * Authentication routes for the CEO Communication Platform
@@ -46,6 +53,15 @@ const PasswordResetRequestSchema = Type.Object({
 const PasswordResetSchema = Type.Object({
   token: Type.String(),
   newPassword: Type.String({ minLength: 8 }),
+});
+
+const VerifyOTPSchema = Type.Object({
+  email: Type.String({ format: 'email' }),
+  otp: Type.String({ pattern: '^[0-9]{6}$' }),
+});
+
+const RequestOTPSchema = Type.Object({
+  email: Type.String({ format: 'email' }),
 });
 
 const ChangePasswordSchema = Type.Object({
@@ -277,15 +293,16 @@ export const registerAuthRoutes = async (fastify: FastifyInstance) => {
           // Self-registration: do not set created_by
         });
 
-        // Generate email verification token
-        const verificationToken = jwtService.generateEmailVerificationToken(user.id, user.email);
-        await userRepository.setEmailVerificationToken(user.id, verificationToken);
+        // Generate email verification OTP
+        const verificationOTP = generateOTP();
+        const otpExpiry = getOTPExpiry();
+        await userRepository.setEmailVerificationOTP(user.id, verificationOTP, otpExpiry);
 
-        // Send verification email
+        // Send verification email with OTP
         const emailSent = await emailService.sendEmailVerification({
           userEmail: user.email,
           userName: user.name,
-          verificationToken,
+          verificationOTP,
         });
 
         if (!emailSent) {
@@ -310,7 +327,7 @@ export const registerAuthRoutes = async (fastify: FastifyInstance) => {
               role: user.role,
             },
             message:
-              'Account created successfully. Please check your email for verification instructions.',
+              'Account created successfully. Please check your email for a 6-digit verification code.',
           },
         });
       } catch (error) {
@@ -608,6 +625,234 @@ export const registerAuthRoutes = async (fastify: FastifyInstance) => {
           error: {
             message: 'Invalid or expired verification token',
             code: 'INVALID_TOKEN',
+          },
+        });
+      }
+    }
+  );
+
+  /**
+   * POST /auth/verify-otp - Verify email address with OTP
+   */
+  fastify.post<{ Body: Static<typeof VerifyOTPSchema> }>(
+    '/auth/verify-otp',
+    {
+      preHandler: [authRateLimit],
+      schema: {
+        tags: ['Authentication'],
+        summary: 'Verify Email with OTP',
+        description: 'Verify email address using a 6-digit OTP code',
+        body: VerifyOTPSchema,
+        response: {
+          200: Type.Object({
+            success: Type.Boolean(),
+            message: Type.String(),
+          }),
+          400: Type.Object({
+            error: Type.Object({
+              message: Type.String(),
+              code: Type.String(),
+            }),
+          }),
+          429: Type.Object({
+            error: Type.Object({
+              message: Type.String(),
+              code: Type.String(),
+            }),
+          }),
+        },
+      },
+    },
+    async (request, reply) => {
+      const { email, otp } = request.body;
+      const context = createErrorContext({
+        ip: request.ip,
+        method: request.method,
+        url: request.url,
+        headers: request.headers as Record<string, string | string[] | undefined>,
+      });
+
+      try {
+        // Get user by email
+        const user = await userRepository.findByEmail(email);
+        if (!user) {
+          // Don't reveal that the email doesn't exist for security reasons
+          reply.code(400).send({
+            error: {
+              message: 'Invalid OTP or email address',
+              code: 'INVALID_OTP',
+            },
+          });
+          return;
+        }
+
+        // Check if user is already verified
+        if (user.email_verified) {
+          reply.code(200).send({
+            success: true,
+            message: 'Email address is already verified.',
+          });
+          return;
+        }
+
+        // Validate OTP
+        const validationResult = validateOTPAttempt(
+          otp,
+          user.email_verification_otp || null,
+          user.email_verification_otp_expires || null,
+          user.otp_attempts || 0
+        );
+
+        // Update attempt count
+        await userRepository.incrementOTPAttempts(user.id);
+
+        if (!validationResult.isValid) {
+          // Check if user is locked out
+          if (validationResult.isLockedOut) {
+            reply.code(429).send({
+              error: {
+                message: validationResult.error || 'Too many attempts. Please try again later.',
+                code: 'OTP_LOCKOUT',
+              },
+            });
+            return;
+          }
+
+          reply.code(400).send({
+            error: {
+              message: validationResult.error || 'Invalid OTP',
+              code: 'INVALID_OTP',
+            },
+          });
+          return;
+        }
+
+        // OTP is valid - verify email
+        await userRepository.verifyEmailWithOTP(user.id);
+
+        securityLogger.logAuthEvent('email_verified', {
+          userId: user.id,
+          email: user.email,
+          ip: request.ip,
+          method: 'OTP',
+        });
+
+        reply.code(200).send({
+          success: true,
+          message: 'Email address verified successfully. You can now log in.',
+        });
+      } catch (error) {
+        logger.error({ error, context, email }, 'OTP verification failed');
+        reply.code(500).send({
+          error: {
+            message: 'Verification failed due to server error',
+            code: 'SERVER_ERROR',
+          },
+        });
+      }
+    }
+  );
+
+  /**
+   * POST /auth/request-otp - Request new OTP for email verification
+   */
+  fastify.post<{ Body: Static<typeof RequestOTPSchema> }>(
+    '/auth/request-otp',
+    {
+      preHandler: [authRateLimit],
+      schema: {
+        tags: ['Authentication'],
+        summary: 'Request New OTP',
+        description: 'Request a new 6-digit OTP for email verification',
+        body: RequestOTPSchema,
+        response: {
+          200: Type.Object({
+            success: Type.Boolean(),
+            message: Type.String(),
+          }),
+          400: Type.Object({
+            error: Type.Object({
+              message: Type.String(),
+              code: Type.String(),
+            }),
+          }),
+        },
+      },
+    },
+    async (request, reply) => {
+      const { email } = request.body;
+      const context = createErrorContext({
+        ip: request.ip,
+        method: request.method,
+        url: request.url,
+        headers: request.headers as Record<string, string | string[] | undefined>,
+      });
+
+      try {
+        // Get user by email
+        const user = await userRepository.findByEmail(email);
+        if (!user) {
+          // Don't reveal that the email doesn't exist for security reasons
+          reply.code(200).send({
+            success: true,
+            message: 'If the email address exists, a new verification code will be sent.',
+          });
+          return;
+        }
+
+        // Check if user is already verified
+        if (user.email_verified) {
+          reply.code(200).send({
+            success: true,
+            message: 'Email address is already verified.',
+          });
+          return;
+        }
+
+        // Check if user is locked out
+        if (hasExceededOTPAttempts(user.otp_attempts || 0)) {
+          reply.code(400).send({
+            error: {
+              message: `Too many attempts. Please try again after ${OTP_CONFIG.LOCKOUT_MINUTES} minutes.`,
+              code: 'OTP_LOCKOUT',
+            },
+          });
+          return;
+        }
+
+        // Generate new OTP
+        const verificationOTP = generateOTP();
+        const otpExpiry = getOTPExpiry();
+        await userRepository.setEmailVerificationOTP(user.id, verificationOTP, otpExpiry);
+
+        // Send verification email with OTP
+        const emailSent = await emailService.sendEmailVerification({
+          userEmail: user.email,
+          userName: user.name,
+          verificationOTP,
+        });
+
+        if (!emailSent) {
+          logger.warn({ userId: user.id, email: user.email }, 'Failed to send verification email');
+        }
+
+        securityLogger.logAuthEvent('otp_requested', {
+          userId: user.id,
+          email: user.email,
+          ip: request.ip,
+          emailSent,
+        });
+
+        reply.code(200).send({
+          success: true,
+          message: 'Verification code sent successfully. Please check your inbox and spam folder.',
+        });
+      } catch (error) {
+        logger.error({ error, context, email }, 'Request OTP failed');
+        reply.code(500).send({
+          error: {
+            message: 'Failed to send verification code',
+            code: 'SERVER_ERROR',
           },
         });
       }

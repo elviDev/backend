@@ -18,6 +18,9 @@ export interface User extends BaseEntity {
     password_reset_token?: string;
     password_reset_expires?: Date;
     email_verification_token?: string;
+    email_verification_otp?: string;
+    email_verification_otp_expires?: Date;
+    otp_attempts: number;
     email_verified: boolean;
     last_active?: Date;
     last_login?: Date;
@@ -117,6 +120,26 @@ declare class UserRepository extends BaseRepository<User> {
      * Verify email with token
      */
     verifyEmail(token: string, client?: DatabaseClient): Promise<User | null>;
+    /**
+     * Set email verification OTP
+     */
+    setEmailVerificationOTP(userId: string, otp: string, expiryDate: Date, client?: DatabaseClient): Promise<boolean>;
+    /**
+     * Increment OTP attempts
+     */
+    incrementOTPAttempts(userId: string, client?: DatabaseClient): Promise<void>;
+    /**
+     * Verify email with OTP
+     */
+    verifyEmailWithOTP(userId: string, client?: DatabaseClient): Promise<User | null>;
+    /**
+     * Find user by email for OTP verification (includes OTP fields)
+     */
+    findByEmailForOTP(email: string, client?: DatabaseClient): Promise<(User & {
+        email_verification_otp: string | null;
+        email_verification_otp_expires: Date | null;
+        otp_attempts: number;
+    }) | null>;
     /**
      * Search users by name or email
      */
