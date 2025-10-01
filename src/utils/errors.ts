@@ -129,12 +129,34 @@ export class DatabaseError extends BaseError {
   readonly statusCode = 500;
   readonly code = 'DATABASE_ERROR';
   readonly isOperational = true;
+  
+  constructor(
+    message: string,
+    context?: Record<string, unknown> & { isTimeout?: boolean }
+  ) {
+    super(message, context);
+  }
+  
+  get isTimeout(): boolean {
+    return (this.context as any)?.isTimeout === true;
+  }
+  
+  get userFriendlyMessage(): string {
+    if (this.isTimeout) {
+      return 'Service temporarily unavailable. Please try again in a moment.';
+    }
+    return 'An unexpected error occurred. Please try again.';
+  }
 }
 
 export class DatabaseConnectionError extends BaseError {
   readonly statusCode = 503;
   readonly code = 'DATABASE_CONNECTION_ERROR';
   readonly isOperational = true;
+  
+  get userFriendlyMessage(): string {
+    return 'Service temporarily unavailable. Please try again in a moment.';
+  }
 }
 
 export class TransactionError extends BaseError {
@@ -271,10 +293,18 @@ export const createErrorContext = (
 
 // Error response formatter
 export const formatErrorResponse = (error: BaseError) => {
+  // Get user-friendly message for database errors
+  const getUserFriendlyMessage = (err: BaseError): string => {
+    if (err instanceof DatabaseError || err instanceof DatabaseConnectionError) {
+      return (err as any).userFriendlyMessage || err.message;
+    }
+    return err.message;
+  };
+
   return {
     error: {
       name: error.name,
-      message: error.message,
+      message: getUserFriendlyMessage(error),
       code: error.code,
       statusCode: error.statusCode,
       ...(error instanceof ValidationError && { 
@@ -285,6 +315,10 @@ export const formatErrorResponse = (error: BaseError) => {
       }),
       ...(error instanceof ExternalServiceError && { 
         service: error.service 
+      }),
+      ...(error instanceof DatabaseError && error.isTimeout && {
+        isRetryable: true,
+        recommendedDelay: 2000 // 2 seconds
       }),
     },
     timestamp: new Date().toISOString(),

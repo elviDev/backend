@@ -13,11 +13,15 @@ export interface Activity extends BaseEntity {
     | 'task_updated'
     | 'task_completed'
     | 'task_assigned'
+    | 'task_unassigned'
     | 'member_joined'
     | 'member_left'
+    | 'member_added'       // Someone added you to a channel
+    | 'member_removed'     // Someone removed you from a channel
     | 'file_uploaded'
     | 'channel_updated'
     | 'channel_created'
+    | 'channel_deleted'
     | 'reaction_added'
     | 'mention'
     | 'voice_command'
@@ -756,11 +760,15 @@ class ActivityRepository extends BaseRepository<Activity> {
     switch (activityType) {
       case 'task_created':
       case 'task_assigned':
+      case 'member_added':
+      case 'member_removed':
         return 'medium';
+      case 'task_unassigned':
+      case 'channel_updated':
+        return 'low';
       case 'task_completed':
         return 'low';
       case 'mention':
-        return 'high';
       case 'voice_command':
         return 'high';
       default:
@@ -777,12 +785,16 @@ class ActivityRepository extends BaseRepository<Activity> {
       case 'task_updated':
       case 'task_completed':
       case 'task_assigned':
+      case 'task_unassigned':
         return 'task';
       case 'message':
       case 'member_joined':
       case 'member_left':
+      case 'member_added':
+      case 'member_removed':
       case 'channel_updated':
       case 'channel_created':
+      case 'channel_deleted':
         return 'channel';
       case 'mention':
       case 'reaction_added':

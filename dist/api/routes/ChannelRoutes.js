@@ -18,6 +18,7 @@ const middleware_1 = require("@auth/middleware");
 const CacheService_1 = require("../../services/CacheService");
 const cache_decorators_1 = require("@utils/cache-decorators");
 const utils_1 = require("@websocket/utils");
+const SocketManager_1 = require("@websocket/SocketManager");
 const validation_1 = require("@utils/validation");
 /**
  * Channel Management API Routes
@@ -42,6 +43,13 @@ const UpdateChannelSchema = typebox_1.Type.Object({
     settings: typebox_1.Type.Optional(typebox_1.Type.Record(typebox_1.Type.String(), typebox_1.Type.Any())),
     tags: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.String({ maxLength: 50 }))),
     color: typebox_1.Type.Optional(typebox_1.Type.String({ pattern: '^#[0-9A-Fa-f]{6}$' })),
+    members: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.Object({
+        user_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
+        id: typebox_1.Type.Optional(validation_1.UUIDSchema), // Allow 'id' as alias for 'user_id'
+        role: typebox_1.Type.Optional(typebox_1.Type.Union([typebox_1.Type.Literal('owner'), typebox_1.Type.Literal('admin'), typebox_1.Type.Literal('member'), typebox_1.Type.Literal('staff')])),
+        name: typebox_1.Type.Optional(typebox_1.Type.String()), // For WebSocket event payload
+        avatar: typebox_1.Type.Optional(typebox_1.Type.String()),
+    })))
 });
 const ChannelMemberSchema = typebox_1.Type.Object({
     user_id: validation_1.UUIDSchema,
@@ -103,7 +111,7 @@ class ChannelService {
     async getAllChannelsForUser(userId, userRole) {
         return await index_1.channelRepository.findAccessibleByUserWithDetails(userId, userRole);
     }
-    async updateChannel(channelId, updateData) {
+    async updateChannel(channelId, updateData, currentUserId) {
         // Map frontend fields to backend fields
         const mappedData = {};
         if (updateData.name !== undefined)
@@ -116,15 +124,80 @@ class ChannelService {
             mappedData.privacy_level = updateData.privacy;
         if (updateData.settings !== undefined)
             mappedData.settings = updateData.settings;
-        // Handle project_info updates
+        // Handle project_info updates with better error handling
         if (updateData.tags !== undefined || updateData.color !== undefined) {
-            const existingChannel = await index_1.channelRepository.findById(channelId);
-            const currentProjectInfo = existingChannel?.project_info || {};
-            mappedData.project_info = {
-                ...currentProjectInfo,
-                ...(updateData.tags !== undefined && { tags: updateData.tags }),
-                ...(updateData.color !== undefined && { color: updateData.color }),
-            };
+            try {
+                const existingChannel = await index_1.channelRepository.findById(channelId);
+                const currentProjectInfo = existingChannel?.project_info || {};
+                mappedData.project_info = {
+                    ...currentProjectInfo,
+                    ...(updateData.tags !== undefined && { tags: updateData.tags }),
+                    ...(updateData.color !== undefined && { color: updateData.color }),
+                };
+            }
+            catch (error) {
+                // If we can't fetch existing channel, just use new values
+                logger_1.loggers.api.warn({ channelId, error: error instanceof Error ? error.message : 'Unknown error' }, 'Could not fetch existing channel for project_info merge, using new values only');
+                mappedData.project_info = {
+                    ...(updateData.tags !== undefined && { tags: updateData.tags }),
+                    ...(updateData.color !== undefined && { color: updateData.color }),
+                };
+            }
+        }
+        // Handle member updates if provided
+        if (updateData.members !== undefined && Array.isArray(updateData.members)) {
+            logger_1.loggers.api.info({ channelId, memberCount: updateData.members.length }, 'Processing member updates in channel update');
+            // Get current members to compare
+            const currentMembers = await index_1.channelRepository.getMembers(channelId);
+            const currentMemberIds = new Set(currentMembers.map(m => m.id)); // Fixed: use m.id instead of m.user_id
+            const newMemberIds = new Set(updateData.members.map((m) => m.user_id || m.id));
+            // Find members to add and remove
+            const membersToAdd = updateData.members.filter((m) => !currentMemberIds.has(m.user_id || m.id));
+            const membersToRemove = currentMembers.filter(m => !newMemberIds.has(m.id) // Fixed: use m.id instead of m.user_id
+            );
+            // Add new members
+            for (const member of membersToAdd) {
+                const userId = member.user_id || member.id;
+                const role = member.role || 'member';
+                try {
+                    await index_1.channelRepository.addMember(channelId, userId, currentUserId);
+                    logger_1.loggers.api.info({ channelId, addedUserId: userId, role }, 'Member added during channel update');
+                    // Send WebSocket event for new member
+                    await utils_1.WebSocketUtils.sendToChannel(channelId, 'user_joined_channel', {
+                        type: 'user_joined_channel',
+                        channelId: channelId,
+                        userId: userId,
+                        userName: member.name || '',
+                        userRole: role,
+                        memberCount: currentMembers.length + membersToAdd.length - membersToRemove.length,
+                        timestamp: new Date().toISOString(),
+                    });
+                }
+                catch (error) {
+                    logger_1.loggers.api.error({ channelId, userId, error: error instanceof Error ? error.message : 'Unknown error' }, 'Failed to add member during channel update');
+                }
+            }
+            // Remove members that are no longer in the list
+            for (const member of membersToRemove) {
+                try {
+                    await index_1.channelRepository.removeMember(channelId, member.id, currentUserId); // Fixed: use member.id instead of member.user_id
+                    logger_1.loggers.api.info({ channelId, removedUserId: member.id }, // Fixed: use member.id
+                    'Member removed during channel update');
+                    // Send WebSocket event for removed member
+                    await utils_1.WebSocketUtils.sendToChannel(channelId, 'user_left_channel', {
+                        type: 'user_left_channel',
+                        channelId: channelId,
+                        userId: member.id, // Fixed: use member.id
+                        userName: member.name || '',
+                        memberCount: currentMembers.length + membersToAdd.length - membersToRemove.length,
+                        timestamp: new Date().toISOString(),
+                    });
+                }
+                catch (error) {
+                    logger_1.loggers.api.error({ channelId, userId: member.id, error: error instanceof Error ? error.message : 'Unknown error' }, // Fixed: use member.id
+                    'Failed to remove member during channel update');
+                }
+            }
         }
         return await index_1.channelRepository.update(channelId, mappedData);
     }
@@ -148,7 +221,7 @@ __decorate([
         namespace: 'channels',
     }),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:paramtypes", [String, Object, String]),
     __metadata("design:returntype", Promise)
 ], ChannelService.prototype, "updateChannel", null);
 __decorate([
@@ -462,7 +535,17 @@ const registerChannelRoutes = async (fastify) => {
             catch (error) {
                 logger_1.loggers.api.warn?.({ error, channelId: channel.id }, 'Failed to create channel creation activity');
             }
-            // Broadcast channel creation
+            // Broadcast channel creation event to all users
+            SocketManager_1.socketManager.broadcast('channel_created', {
+                type: 'channel_created',
+                channelId: channel.id,
+                channel: channel,
+                userId: request.user.userId,
+                userName: request.user.name,
+                userRole: request.user.role,
+                timestamp: new Date().toISOString(),
+            });
+            // Broadcast channel creation message to channel members
             await utils_1.WebSocketUtils.broadcastChannelMessage({
                 type: 'chat_message',
                 channelId: channel.id,
@@ -539,7 +622,15 @@ const registerChannelRoutes = async (fastify) => {
         try {
             const { id } = request.params;
             const updateData = request.body;
-            const channel = await channelService.updateChannel(id, updateData);
+            // Debug: Log what data we received
+            console.log('🔍 Channel update received:', {
+                channelId: id,
+                updateData: updateData,
+                hasMembers: !!updateData.members,
+                membersLength: updateData.members?.length,
+                membersType: typeof updateData.members
+            });
+            const channel = await channelService.updateChannel(id, updateData, request.user.userId);
             // Broadcast channel update
             await utils_1.WebSocketUtils.sendToChannel(id, 'channel_updated', {
                 type: 'channel_updated',
@@ -762,6 +853,9 @@ const registerChannelRoutes = async (fastify) => {
             if (!success) {
                 throw new errors_1.ValidationError('Failed to add member to channel', []);
             }
+            // Get updated member count
+            const updatedMembers = await index_1.channelRepository.getMembers(id);
+            const memberCount = updatedMembers.length;
             // Broadcast member addition
             await utils_1.WebSocketUtils.sendToChannel(id, 'user_joined_channel', {
                 type: 'user_joined_channel',
@@ -769,9 +863,15 @@ const registerChannelRoutes = async (fastify) => {
                 userId: user_id,
                 userName: '', // TODO: Get user name
                 userRole: request.user.role,
-                memberCount: (await index_1.channelRepository.getMembers(id)).length,
+                memberCount: memberCount,
                 timestamp: new Date().toISOString(),
             });
+            logger_1.loggers.api.info({
+                channelId: id,
+                addedUserId: user_id,
+                memberCount: memberCount,
+                eventSent: 'user_joined_channel',
+            }, 'Member addition WebSocket event sent');
             logger_1.loggers.api.info({
                 userId: request.user?.userId,
                 channelId: id,

@@ -100,11 +100,17 @@ export declare class DatabaseError extends BaseError {
     readonly statusCode = 500;
     readonly code = "DATABASE_ERROR";
     readonly isOperational = true;
+    constructor(message: string, context?: Record<string, unknown> & {
+        isTimeout?: boolean;
+    });
+    get isTimeout(): boolean;
+    get userFriendlyMessage(): string;
 }
 export declare class DatabaseConnectionError extends BaseError {
     readonly statusCode = 503;
     readonly code = "DATABASE_CONNECTION_ERROR";
     readonly isOperational = true;
+    get userFriendlyMessage(): string;
 }
 export declare class TransactionError extends BaseError {
     readonly statusCode = 500;
@@ -190,6 +196,8 @@ export declare const createErrorContext: (req?: {
 }) => Record<string, unknown>;
 export declare const formatErrorResponse: (error: BaseError) => {
     error: {
+        isRetryable?: boolean | undefined;
+        recommendedDelay?: number | undefined;
         service?: string | undefined;
         retryAfter?: number | undefined;
         validationErrors?: {

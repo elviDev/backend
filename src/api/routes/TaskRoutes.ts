@@ -13,6 +13,7 @@ import { authenticate, authorize, authorizeRoles, requireChannelAccess, requireT
 import { cacheService } from '../../services/CacheService';
 import { Cacheable, CacheEvict, CacheKeyUtils } from '@utils/cache-decorators';
 import { WebSocketUtils } from '@websocket/utils';
+import { notificationService } from '../../services/NotificationService';
 import {
   UUIDSchema,
   PaginationSchema,
@@ -131,8 +132,92 @@ class TaskService {
     namespace: 'tasks',
     tags: ['tasks'],
   })
-  async updateTask(taskId: string, updateData: any) {
-    return await taskRepository.update(taskId, updateData);
+  async updateTask(taskId: string, updateData: any, currentUserId?: string, currentUserName?: string) {
+    // Get current task state to compare assignments
+    const currentTask = await taskRepository.findById(taskId);
+    if (!currentTask) {
+      throw new Error('Task not found');
+    }
+
+    const updatedTask = await taskRepository.update(taskId, updateData);
+
+    // Check for assignment changes and send notifications
+    if (updateData.assigned_to && currentUserId && currentUserName) {
+      const currentAssignees = new Set(currentTask.assigned_to || []);
+      const newAssignees = new Set(updateData.assigned_to || []);
+
+      // Find newly assigned users
+      const newlyAssigned = Array.from(newAssignees).filter(userId => !currentAssignees.has(userId));
+      // Find unassigned users
+      const unassigned = Array.from(currentAssignees).filter(userId => !newAssignees.has(userId));
+
+      // Send notifications for newly assigned users
+      if (newlyAssigned.length > 0) {
+        try {
+          await notificationService.notifyTaskAssigned(newlyAssigned, {
+            actorId: currentUserId,
+            actorName: currentUserName,
+            taskId: taskId,
+            taskTitle: updatedTask.title || 'Unknown Task',
+            channelId: updatedTask.channel_id,
+            entityId: taskId,
+            entityType: 'task',
+            metadata: { newlyAssigned, previousAssignees: Array.from(currentAssignees) }
+          });
+        } catch (notifError) {
+          logger.warn(
+            { taskId, newlyAssigned, error: notifError instanceof Error ? notifError.message : 'Unknown error' },
+            'Failed to send task assignment notification'
+          );
+        }
+      }
+
+      // Send notifications for unassigned users
+      if (unassigned.length > 0) {
+        try {
+          await notificationService.notifyTaskUnassigned(unassigned, {
+            actorId: currentUserId,
+            actorName: currentUserName,
+            taskId: taskId,
+            taskTitle: updatedTask.title || 'Unknown Task',
+            channelId: updatedTask.channel_id,
+            entityId: taskId,
+            entityType: 'task',
+            metadata: { unassigned, currentAssignees: Array.from(newAssignees) }
+          });
+        } catch (notifError) {
+          logger.warn(
+            { taskId, unassigned, error: notifError instanceof Error ? notifError.message : 'Unknown error' },
+            'Failed to send task unassignment notification'
+          );
+        }
+      }
+    }
+
+    // Check for other task updates (excluding assignment changes)
+    const hasNonAssignmentChanges = Object.keys(updateData).some(key => key !== 'assigned_to');
+    if (hasNonAssignmentChanges && currentUserId && currentUserName && updatedTask.assigned_to?.length > 0) {
+      try {
+        const changes = Object.keys(updateData).filter(key => key !== 'assigned_to');
+        await notificationService.notifyTaskUpdated(updatedTask.assigned_to, {
+          actorId: currentUserId,
+          actorName: currentUserName,
+          taskId: taskId,
+          taskTitle: updatedTask.title || 'Unknown Task',
+          channelId: updatedTask.channel_id,
+          entityId: taskId,
+          entityType: 'task',
+          metadata: { changedFields: changes }
+        }, changes);
+      } catch (notifError) {
+        logger.warn(
+          { taskId, error: notifError instanceof Error ? notifError.message : 'Unknown error' },
+          'Failed to send task update notification'
+        );
+      }
+    }
+
+    return updatedTask;
   }
 
   @CacheEvict({
@@ -616,6 +701,31 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
           loggers.api.warn?.({ error, taskId: task.id }, 'Failed to create task creation activity');
         }
 
+        // Send assignment notifications for newly created task
+        if (task.assigned_to && task.assigned_to.length > 0) {
+          try {
+            await notificationService.notifyTaskAssigned(task.assigned_to, {
+              actorId: request.user!.userId,
+              actorName: request.user!.name,
+              taskId: task.id,
+              taskTitle: task.title,
+              channelId: task.channel_id,
+              entityId: task.id,
+              entityType: 'task',
+              metadata: { 
+                newlyCreated: true,
+                taskPriority: task.priority,
+                taskStatus: task.status 
+              }
+            });
+          } catch (notifError) {
+            loggers.api.warn(
+              { taskId: task.id, assignedUsers: task.assigned_to, error: notifError instanceof Error ? notifError.message : 'Unknown error' },
+              'Failed to send task assignment notification for new task'
+            );
+          }
+        }
+
         // Broadcast task creation
         await WebSocketUtils.broadcastTaskUpdate({
           type: 'task_created',
@@ -752,7 +862,7 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
           throw new AuthorizationError('You do not have permission to update this task');
         }
 
-        const task = await taskService.updateTask(id, updateData);
+        const task = await taskService.updateTask(id, updateData, request.user!.userId, request.user!.name);
 
         // Broadcast task update
         await WebSocketUtils.broadcastTaskUpdate({
@@ -1505,6 +1615,32 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
         }
 
         const task = await taskService.createTask(taskData);
+
+        // Send assignment notifications for newly created channel task
+        if (task.assigned_to && task.assigned_to.length > 0) {
+          try {
+            await notificationService.notifyTaskAssigned(task.assigned_to, {
+              actorId: request.user!.userId,
+              actorName: request.user!.name,
+              taskId: task.id,
+              taskTitle: task.title,
+              channelId: task.channel_id,
+              entityId: task.id,
+              entityType: 'task',
+              metadata: { 
+                newlyCreated: true,
+                isChannelTask: true,
+                taskPriority: task.priority,
+                taskStatus: task.status 
+              }
+            });
+          } catch (notifError) {
+            loggers.api.warn(
+              { taskId: task.id, channelId, assignedUsers: task.assigned_to, error: notifError instanceof Error ? notifError.message : 'Unknown error' },
+              'Failed to send task assignment notification for new channel task'
+            );
+          }
+        }
 
         // Create activity for channel task creation
         try {

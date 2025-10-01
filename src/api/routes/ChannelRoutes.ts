@@ -21,6 +21,8 @@ import {
 import { cacheService } from '../../services/CacheService';
 import { Cacheable, CacheEvict, CacheKeyUtils } from '@utils/cache-decorators';
 import { WebSocketUtils } from '@websocket/utils';
+import { socketManager } from '@websocket/SocketManager';
+import { notificationService } from '../../services/NotificationService';
 import {
   UUIDSchema,
   PaginationSchema,
@@ -44,6 +46,12 @@ const CreateChannelSchema = Type.Object({
   settings: Type.Optional(Type.Record(Type.String(), Type.Any())),
   tags: Type.Optional(Type.Array(Type.String({ maxLength: 50 }))),
   color: Type.Optional(Type.String({ pattern: '^#[0-9A-Fa-f]{6}$' })),
+  members: Type.Optional(Type.Array(Type.Object({
+    user_id: Type.Optional(UUIDSchema),
+    id: Type.Optional(UUIDSchema),
+    name: Type.Optional(Type.String()),
+    role: Type.Optional(Type.String()),
+  }))),
 });
 
 const UpdateChannelSchema = Type.Object({
@@ -54,6 +62,14 @@ const UpdateChannelSchema = Type.Object({
   settings: Type.Optional(Type.Record(Type.String(), Type.Any())),
   tags: Type.Optional(Type.Array(Type.String({ maxLength: 50 }))),
   color: Type.Optional(Type.String({ pattern: '^#[0-9A-Fa-f]{6}$' })),
+  members: Type.Optional(Type.Array(Type.Object({
+    user_id: Type.Optional(UUIDSchema),
+    id: Type.Optional(UUIDSchema), // Allow 'id' as alias for 'user_id'
+    role: Type.Optional(Type.Union([Type.Literal('owner'), Type.Literal('admin'), Type.Literal('member'), Type.Literal('staff')])),
+    name: Type.Optional(Type.String()), // For WebSocket event payload
+    avatar: Type.Optional(Type.String()),
+
+  })))
 });
 
 const ChannelMemberSchema = Type.Object({
@@ -129,7 +145,7 @@ class ChannelService {
     keys: (channelId: string) => [CacheKeyUtils.channelKey(channelId)],
     namespace: 'channels',
   })
-  async updateChannel(channelId: string, updateData: any) {
+  async updateChannel(channelId: string, updateData: any, currentUserId: string, currentUserName?: string) {
     // Map frontend fields to backend fields
     const mappedData: any = {};
     
@@ -139,19 +155,177 @@ class ChannelService {
     if (updateData.privacy !== undefined) mappedData.privacy_level = updateData.privacy;
     if (updateData.settings !== undefined) mappedData.settings = updateData.settings;
     
-    // Handle project_info updates
+    // Handle project_info updates with better error handling
     if (updateData.tags !== undefined || updateData.color !== undefined) {
-      const existingChannel = await channelRepository.findById(channelId);
-      const currentProjectInfo = existingChannel?.project_info || {};
-      
-      mappedData.project_info = {
-        ...currentProjectInfo,
-        ...(updateData.tags !== undefined && { tags: updateData.tags }),
-        ...(updateData.color !== undefined && { color: updateData.color }),
-      };
+      try {
+        const existingChannel = await channelRepository.findById(channelId);
+        const currentProjectInfo = existingChannel?.project_info || {};
+        
+        mappedData.project_info = {
+          ...currentProjectInfo,
+          ...(updateData.tags !== undefined && { tags: updateData.tags }),
+          ...(updateData.color !== undefined && { color: updateData.color }),
+        };
+      } catch (error) {
+        // If we can't fetch existing channel, just use new values
+        loggers.api.warn(
+          { channelId, error: error instanceof Error ? error.message : 'Unknown error' },
+          'Could not fetch existing channel for project_info merge, using new values only'
+        );
+        mappedData.project_info = {
+          ...(updateData.tags !== undefined && { tags: updateData.tags }),
+          ...(updateData.color !== undefined && { color: updateData.color }),
+        };
+      }
+    }
+
+    // Handle member updates if provided
+    if (updateData.members !== undefined && Array.isArray(updateData.members)) {
+      loggers.api.info(
+        { channelId, memberCount: updateData.members.length },
+        'Processing member updates in channel update'
+      );
+
+      // Get current members to compare
+      const currentMembers = await channelRepository.getMembers(channelId);
+      const currentMemberIds = new Set(currentMembers.map(m => m.id)); // Fixed: use m.id instead of m.user_id
+      const newMemberIds = new Set(updateData.members.map((m: any) => m.user_id || m.id));
+
+      // Find members to add and remove
+      const membersToAdd = updateData.members.filter((m: any) => 
+        !currentMemberIds.has(m.user_id || m.id)
+      );
+      const membersToRemove = currentMembers.filter(m => 
+        !newMemberIds.has(m.id) // Fixed: use m.id instead of m.user_id
+      );
+
+      // Add new members
+      for (const member of membersToAdd) {
+        const userId = member.user_id || member.id;
+        const role = member.role || 'member';
+        
+        try {
+          await channelRepository.addMember(channelId, userId, currentUserId);
+          
+          loggers.api.info(
+            { channelId, addedUserId: userId, role },
+            'Member added during channel update'
+          );
+
+          // Send WebSocket event for new member
+          await WebSocketUtils.sendToChannel(channelId, 'user_joined_channel', {
+            type: 'user_joined_channel',
+            channelId: channelId,
+            userId: userId,
+            userName: member.name || '', 
+            userRole: role,
+            memberCount: currentMembers.length + membersToAdd.length - membersToRemove.length,
+            timestamp: new Date().toISOString(),
+          });
+
+          // Send notification to the added user
+          try {
+            const channel = await channelRepository.findById(channelId);
+            
+            await notificationService.notifyMemberAdded(userId, {
+              actorId: currentUserId,
+              actorName: currentUserName || 'Someone',
+              channelId: channelId,
+              channelName: channel?.name || 'Unknown Channel',
+              entityId: channelId,
+              entityType: 'channel',
+              metadata: { memberRole: role }
+            });
+          } catch (notifError) {
+            loggers.api.warn(
+              { channelId, userId, error: notifError instanceof Error ? notifError.message : 'Unknown error' },
+              'Failed to send member added notification'
+            );
+          }
+        } catch (error) {
+          loggers.api.error(
+            { channelId, userId, error: error instanceof Error ? error.message : 'Unknown error' },
+            'Failed to add member during channel update'
+          );
+        }
+      }
+
+      // Remove members that are no longer in the list
+      for (const member of membersToRemove) {
+        try {
+          await channelRepository.removeMember(channelId, member.id, currentUserId); // Fixed: use member.id instead of member.user_id
+          
+          loggers.api.info(
+            { channelId, removedUserId: member.id }, // Fixed: use member.id
+            'Member removed during channel update'
+          );
+
+          // Send WebSocket event for removed member
+          await WebSocketUtils.sendToChannel(channelId, 'user_left_channel', {
+            type: 'user_left_channel',
+            channelId: channelId,
+            userId: member.id, // Fixed: use member.id
+            userName: member.name || '',
+            memberCount: currentMembers.length + membersToAdd.length - membersToRemove.length,
+            timestamp: new Date().toISOString(),
+          });
+
+          // Send notification to the removed user
+          try {
+            const channel = await channelRepository.findById(channelId);
+            
+            await notificationService.notifyMemberRemoved(member.id, {
+              actorId: currentUserId,
+              actorName: currentUserName || 'Someone',
+              channelId: channelId,
+              channelName: channel?.name || 'Unknown Channel',
+              entityId: channelId,
+              entityType: 'channel',
+              metadata: { removedMember: { id: member.id, name: member.name } }
+            });
+          } catch (notifError) {
+            loggers.api.warn(
+              { channelId, userId: member.id, error: notifError instanceof Error ? notifError.message : 'Unknown error' },
+              'Failed to send member removed notification'
+            );
+          }
+        } catch (error) {
+          loggers.api.error(
+            { channelId, userId: member.id, error: error instanceof Error ? error.message : 'Unknown error' }, // Fixed: use member.id
+            'Failed to remove member during channel update'
+          );
+        }
+      }
     }
     
-    return await channelRepository.update(channelId, mappedData);
+    const updatedChannel = await channelRepository.update(channelId, mappedData);
+
+    // Send channel update notification to all members (excluding member changes which are handled above)
+    const hasNonMemberChanges = Object.keys(updateData).some(key => key !== 'members');
+    if (hasNonMemberChanges) {
+      try {
+        const allMembers = await channelRepository.getMembers(channelId);
+        const memberIds = allMembers.map(m => m.id);
+        const changes = Object.keys(updateData).filter(key => key !== 'members');
+        
+        await notificationService.notifyChannelUpdated(memberIds, {
+          actorId: currentUserId,
+          actorName: currentUserName || 'Someone',
+          channelId: channelId,
+          channelName: updatedChannel?.name || 'Unknown Channel',
+          entityId: channelId,
+          entityType: 'channel',
+          metadata: { changedFields: changes }
+        }, changes);
+      } catch (notifError) {
+        loggers.api.warn(
+          { channelId, error: notifError instanceof Error ? notifError.message : 'Unknown error' },
+          'Failed to send channel update notification'
+        );
+      }
+    }
+    
+    return updatedChannel;
   }
 
   @CacheEvict({
@@ -467,12 +641,30 @@ export const registerChannelRoutes = async (fastify: FastifyInstance) => {
     },
     async (request, reply) => {
       try {
+        // Process members data
+        const members: string[] = [];
+        if (request.body.members && Array.isArray(request.body.members)) {
+          // Extract user IDs from member objects
+          for (const member of request.body.members) {
+            const userId = member.user_id || member.id;
+            if (userId && typeof userId === 'string') {
+              members.push(userId);
+            }
+          }
+        }
+        
+        // Always include the creator as a member
+        if (!members.includes(request.user!.userId)) {
+          members.push(request.user!.userId);
+        }
+
         const channelData = {
           name: request.body.name,
           description: request.body.description,
           channel_type: request.body.type,
           privacy_level: request.body.privacy,
           created_by: request.user!.userId,
+          members: members, // Include processed members
           settings: request.body.settings || {},
           project_info: {
             tags: request.body.tags || [],
@@ -511,7 +703,21 @@ export const registerChannelRoutes = async (fastify: FastifyInstance) => {
           loggers.api.warn?.({ error, channelId: channel.id }, 'Failed to create channel creation activity');
         }
 
-        // Broadcast channel creation
+        // Fetch complete channel data with member details for WebSocket event
+        const completeChannel = await channelRepository.findWithMembers(channel.id);
+        
+        // Broadcast channel creation event to all users
+        socketManager.broadcast('channel_created', {
+          type: 'channel_created',
+          channelId: channel.id,
+          channel: completeChannel,
+          userId: request.user!.userId,
+          userName: request.user!.name,
+          userRole: request.user!.role,
+          timestamp: new Date().toISOString(),
+        });
+
+        // Broadcast channel creation message to channel members
         await WebSocketUtils.broadcastChannelMessage({
           type: 'chat_message',
           channelId: channel.id,
@@ -601,7 +807,16 @@ export const registerChannelRoutes = async (fastify: FastifyInstance) => {
         const { id } = request.params;
         const updateData = request.body;
 
-        const channel = await channelService.updateChannel(id, updateData);
+        // Debug: Log what data we received
+        console.log('🔍 Channel update received:', {
+          channelId: id,
+          updateData: updateData,
+          hasMembers: !!updateData.members,
+          membersLength: updateData.members?.length,
+          membersType: typeof updateData.members
+        });
+
+        const channel = await channelService.updateChannel(id, updateData, request.user!.userId, request.user!.name);
 
         // Broadcast channel update
         await WebSocketUtils.sendToChannel(id, 'channel_updated', {
@@ -869,6 +1084,10 @@ export const registerChannelRoutes = async (fastify: FastifyInstance) => {
           throw new ValidationError('Failed to add member to channel', []);
         }
 
+        // Get updated member count
+        const updatedMembers = await channelRepository.getMembers(id);
+        const memberCount = updatedMembers.length;
+        
         // Broadcast member addition
         await WebSocketUtils.sendToChannel(id, 'user_joined_channel', {
           type: 'user_joined_channel',
@@ -876,9 +1095,19 @@ export const registerChannelRoutes = async (fastify: FastifyInstance) => {
           userId: user_id,
           userName: '', // TODO: Get user name
           userRole: request.user!.role,
-          memberCount: (await channelRepository.getMembers(id)).length,
+          memberCount: memberCount,
           timestamp: new Date().toISOString(),
         });
+        
+        loggers.api.info(
+          {
+            channelId: id,
+            addedUserId: user_id,
+            memberCount: memberCount,
+            eventSent: 'user_joined_channel',
+          },
+          'Member addition WebSocket event sent'
+        );
 
         loggers.api.info(
           {

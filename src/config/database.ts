@@ -15,14 +15,15 @@ const poolConfig: PoolConfig = {
   max: config.database.pool.max,
 
   // Connection lifecycle settings
-  idleTimeoutMillis: 30000, // 30 seconds idle timeout
-  connectionTimeoutMillis: 30000, // 30 seconds connection timeout (increased for AWS RDS)
+  idleTimeoutMillis: 10000, // 10 seconds idle timeout (reduced)
+  connectionTimeoutMillis: 5000, // 5 seconds connection timeout (reduced for faster failure)
   maxUses: 7500, // Maximum uses per connection before recycling
 
   // SSL configuration for production and AWS RDS
   ssl: config.database.url.includes('rds.amazonaws.com')
     ? {
         rejectUnauthorized: false, // Required for AWS RDS
+        sslmode: 'require', // Force SSL
       }
     : config.app.isProduction
       ? {
@@ -30,9 +31,9 @@ const poolConfig: PoolConfig = {
         }
       : false,
 
-  // Query timeout settings
-  query_timeout: 30000, // 30 seconds max query time
-  statement_timeout: 30000, // Statement timeout
+  // Query timeout settings - reduced for better UX
+  query_timeout: 5000, // 5 seconds max query time (reduced)
+  statement_timeout: 5000, // Statement timeout (reduced)
 
   // Performance optimizations
   application_name: 'ceo-communication-platform',
@@ -116,6 +117,86 @@ export const getPool = (): Pool => {
 };
 
 /**
+ * Retry configuration for database operations
+ */
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  baseDelay: 1000, // 1 second
+  maxDelay: 5000,  // 5 seconds max
+  timeoutErrors: ['timeout', 'ETIMEDOUT', 'ECONNRESET', 'ENOTFOUND', 'connection terminating'],
+};
+
+/**
+ * Check if error is retryable
+ */
+const isRetryableError = (error: any): boolean => {
+  const errorMessage = error.message?.toLowerCase() || '';
+  const errorCode = error.code?.toLowerCase() || '';
+  
+  return RETRY_CONFIG.timeoutErrors.some(keyword => 
+    errorMessage.includes(keyword) || errorCode.includes(keyword)
+  );
+};
+
+/**
+ * Execute operation with retry logic
+ */
+const executeWithRetry = async <T>(
+  operation: () => Promise<T>,
+  context: string,
+  retryCount = 0
+): Promise<T> => {
+  try {
+    return await operation();
+  } catch (error) {
+    const isTimeout = isRetryableError(error);
+    const canRetry = retryCount < RETRY_CONFIG.maxRetries && isTimeout;
+    
+    if (canRetry) {
+      const delay = Math.min(
+        RETRY_CONFIG.baseDelay * Math.pow(2, retryCount),
+        RETRY_CONFIG.maxDelay
+      );
+      
+      logger.warn(
+        {
+          context,
+          retryCount: retryCount + 1,
+          maxRetries: RETRY_CONFIG.maxRetries,
+          delay,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        },
+        'Database operation failed, retrying...'
+      );
+      
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return executeWithRetry(operation, context, retryCount + 1);
+    }
+    
+    // Log final failure with user-friendly message
+    logger.error(
+      {
+        context,
+        retryCount,
+        error,
+        wasRetryable: isTimeout,
+      },
+      'Database operation failed after all retries'
+    );
+    
+    // Throw user-friendly error for timeouts
+    if (isTimeout) {
+      throw new DatabaseError(
+        'Service temporarily unavailable. Please try again in a moment.',
+        { originalError: error, isTimeout: true }
+      );
+    }
+    
+    throw error;
+  }
+};
+
+/**
  * Execute a query with performance monitoring
  */
 export const query = async <T = any>(
@@ -131,39 +212,41 @@ export const query = async <T = any>(
 
   return performanceLogger.trackAsyncOperation(
     async () => {
-      try {
-        const result = await queryClient.query(text, params);
+      return executeWithRetry(async () => {
+        try {
+          const result = await queryClient.query(text, params);
 
-        if (config.development.debugSql) {
-          logger.debug(
+          if (config.development.debugSql) {
+            logger.debug(
+              {
+                query: text,
+                params: params,
+                rowCount: result.rowCount,
+              },
+              'SQL Query executed'
+            );
+          }
+
+          return {
+            rows: result.rows,
+            rowCount: result.rowCount || 0,
+          };
+        } catch (error) {
+          logger.error(
             {
+              error,
               query: text,
               params: params,
-              rowCount: result.rowCount,
             },
-            'SQL Query executed'
+            'Database query failed'
+          );
+
+          throw new DatabaseError(
+            `Database query failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+            { query: text, params }
           );
         }
-
-        return {
-          rows: result.rows,
-          rowCount: result.rowCount || 0,
-        };
-      } catch (error) {
-        logger.error(
-          {
-            error,
-            query: text,
-            params: params,
-          },
-          'Database query failed'
-        );
-
-        throw new DatabaseError(
-          `Database query failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          { query: text, params }
-        );
-      }
+      }, `query: ${text.substring(0, 50)}...`);
     },
     'database-query',
     { query: text.substring(0, 100) + (text.length > 100 ? '...' : '') }

@@ -189,14 +189,26 @@ class MessageRepository extends BaseRepository<Message> {
     const sql = `
       SELECT 
         m.*,
-        json_build_object(
-          'id', u.id,
-          'name', u.name,
-          'email', u.email,
-          'avatar_url', u.avatar_url,
-          'role', u.role,
-          'phone', u.phone
-        ) as user_details,
+        CASE 
+          WHEN u.id IS NOT NULL THEN
+            json_build_object(
+              'id', u.id,
+              'name', u.name,
+              'email', u.email,
+              'avatar_url', u.avatar_url,
+              'role', u.role,
+              'phone', u.phone
+            )
+          ELSE
+            json_build_object(
+              'id', m.user_id,
+              'name', 'Unknown User',
+              'email', '',
+              'avatar_url', null,
+              'role', 'staff',
+              'phone', ''
+            )
+        END as user_details,
         -- Reply to message info
         CASE 
           WHEN m.reply_to_id IS NOT NULL THEN
@@ -368,14 +380,26 @@ class MessageRepository extends BaseRepository<Message> {
     const sql = `
       SELECT 
         m.*,
-        json_build_object(
-          'id', u.id,
-          'name', u.name,
-          'email', u.email,
-          'avatar_url', u.avatar_url,
-          'role', u.role,
-          'phone', u.phone
-        ) as user_details,
+        CASE 
+          WHEN u.id IS NOT NULL THEN
+            json_build_object(
+              'id', u.id,
+              'name', u.name,
+              'email', u.email,
+              'avatar_url', u.avatar_url,
+              'role', u.role,
+              'phone', u.phone
+            )
+          ELSE
+            json_build_object(
+              'id', m.user_id,
+              'name', 'Unknown User',
+              'email', '',
+              'avatar_url', null,
+              'role', 'staff',
+              'phone', ''
+            )
+        END as user_details,
         COALESCE(thread_stats.reply_count, 0) as reply_count,
         thread_stats.last_reply_timestamp,
         deleter.name as deleted_by_name
@@ -412,14 +436,26 @@ class MessageRepository extends BaseRepository<Message> {
     const sql = `
       SELECT 
         m.*,
-        json_build_object(
-          'id', u.id,
-          'name', u.name,
-          'email', u.email,
-          'avatar_url', u.avatar_url,
-          'role', u.role,
-          'phone', u.phone
-        ) as user_details,
+        CASE 
+          WHEN u.id IS NOT NULL THEN
+            json_build_object(
+              'id', u.id,
+              'name', u.name,
+              'email', u.email,
+              'avatar_url', u.avatar_url,
+              'role', u.role,
+              'phone', u.phone
+            )
+          ELSE
+            json_build_object(
+              'id', m.user_id,
+              'name', 'Unknown User',
+              'email', '',
+              'avatar_url', null,
+              'role', 'staff',
+              'phone', ''
+            )
+        END as user_details,
         deleter.name as deleted_by_name
       FROM ${this.tableName} m
       LEFT JOIN users u ON m.user_id = u.id
@@ -677,10 +713,26 @@ class MessageRepository extends BaseRepository<Message> {
     const sql = `
       SELECT 
         m.*,
-        u.name as user_name,
-        u.email as user_email,
-        u.avatar_url as user_avatar,
-        u.role as user_role,
+        CASE 
+          WHEN u.id IS NOT NULL THEN
+            json_build_object(
+              'id', u.id,
+              'name', u.name,
+              'email', u.email,
+              'avatar_url', u.avatar_url,
+              'role', u.role,
+              'phone', u.phone
+            )
+          ELSE
+            json_build_object(
+              'id', m.user_id,
+              'name', 'Unknown User',
+              'email', '',
+              'avatar_url', null,
+              'role', 'staff',
+              'phone', ''
+            )
+        END as user_details,
         deleter.name as deleted_by_name
       FROM ${this.tableName} m
       LEFT JOIN users u ON m.user_id = u.id
@@ -710,10 +762,26 @@ class MessageRepository extends BaseRepository<Message> {
     const sql = `
       SELECT 
         m.*,
-        u.name as user_name,
-        u.email as user_email,
-        u.avatar_url as user_avatar,
-        u.role as user_role,
+        CASE 
+          WHEN u.id IS NOT NULL THEN
+            json_build_object(
+              'id', u.id,
+              'name', u.name,
+              'email', u.email,
+              'avatar_url', u.avatar_url,
+              'role', u.role,
+              'phone', u.phone
+            )
+          ELSE
+            json_build_object(
+              'id', m.user_id,
+              'name', 'Unknown User',
+              'email', '',
+              'avatar_url', null,
+              'role', 'staff',
+              'phone', ''
+            )
+        END as user_details,
         deleter.name as deleted_by_name
       FROM ${this.tableName} m
       LEFT JOIN users u ON m.user_id = u.id

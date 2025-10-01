@@ -112,12 +112,27 @@ class DatabaseError extends BaseError {
     statusCode = 500;
     code = 'DATABASE_ERROR';
     isOperational = true;
+    constructor(message, context) {
+        super(message, context);
+    }
+    get isTimeout() {
+        return this.context?.isTimeout === true;
+    }
+    get userFriendlyMessage() {
+        if (this.isTimeout) {
+            return 'Service temporarily unavailable. Please try again in a moment.';
+        }
+        return 'An unexpected error occurred. Please try again.';
+    }
 }
 exports.DatabaseError = DatabaseError;
 class DatabaseConnectionError extends BaseError {
     statusCode = 503;
     code = 'DATABASE_CONNECTION_ERROR';
     isOperational = true;
+    get userFriendlyMessage() {
+        return 'Service temporarily unavailable. Please try again in a moment.';
+    }
 }
 exports.DatabaseConnectionError = DatabaseConnectionError;
 class TransactionError extends BaseError {
@@ -243,10 +258,17 @@ const createErrorContext = (req) => {
 exports.createErrorContext = createErrorContext;
 // Error response formatter
 const formatErrorResponse = (error) => {
+    // Get user-friendly message for database errors
+    const getUserFriendlyMessage = (err) => {
+        if (err instanceof DatabaseError || err instanceof DatabaseConnectionError) {
+            return err.userFriendlyMessage || err.message;
+        }
+        return err.message;
+    };
     return {
         error: {
             name: error.name,
-            message: error.message,
+            message: getUserFriendlyMessage(error),
             code: error.code,
             statusCode: error.statusCode,
             ...(error instanceof ValidationError && {
@@ -257,6 +279,10 @@ const formatErrorResponse = (error) => {
             }),
             ...(error instanceof ExternalServiceError && {
                 service: error.service
+            }),
+            ...(error instanceof DatabaseError && error.isTimeout && {
+                isRetryable: true,
+                recommendedDelay: 2000 // 2 seconds
             }),
         },
         timestamp: new Date().toISOString(),

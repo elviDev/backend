@@ -601,7 +601,7 @@ const registerAuthRoutes = async (fastify) => {
                 return;
             }
             // Validate OTP
-            const validationResult = (0, otp_1.validateOTPAttempt)(otp, user.email_verification_otp, user.email_verification_otp_expires, user.otp_attempts || 0);
+            const validationResult = (0, otp_1.validateOTPAttempt)(otp, user.email_verification_otp || null, user.email_verification_otp_expires || null, user.otp_attempts || 0);
             // Update attempt count
             await index_1.userRepository.incrementOTPAttempts(user.id);
             if (!validationResult.isValid) {
