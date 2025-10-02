@@ -641,6 +641,11 @@ export const registerChannelRoutes = async (fastify: FastifyInstance) => {
     },
     async (request, reply) => {
       try {
+        // Validate public channel creation - only CEO can create public channels
+        if (request.body.privacy === 'public' && request.user!.role !== 'ceo') {
+          throw new AuthorizationError('Only CEOs can create public channels');
+        }
+
         // Process members data
         const members: string[] = [];
         if (request.body.members && Array.isArray(request.body.members)) {
@@ -807,6 +812,22 @@ export const registerChannelRoutes = async (fastify: FastifyInstance) => {
         const { id } = request.params;
         const updateData = request.body;
 
+        // Check if this is a public channel and validate CEO permissions
+        const existingChannel = await channelRepository.findById(id);
+        if (!existingChannel) {
+          throw new NotFoundError('Channel not found');
+        }
+
+        // Only CEO can edit public channels
+        if (existingChannel.privacy_level === 'public' && request.user!.role !== 'ceo') {
+          throw new AuthorizationError('Only CEOs can edit public channels');
+        }
+
+        // If changing privacy to public, only CEO can do this
+        if (updateData.privacy === 'public' && request.user!.role !== 'ceo') {
+          throw new AuthorizationError('Only CEOs can change channels to public');
+        }
+
         // Debug: Log what data we received
         console.log('🔍 Channel update received:', {
           channelId: id,
@@ -896,6 +917,17 @@ export const registerChannelRoutes = async (fastify: FastifyInstance) => {
     async (request, reply) => {
       try {
         const { id } = request.params;
+
+        // Check if this is a public channel and validate CEO permissions
+        const existingChannel = await channelRepository.findById(id);
+        if (!existingChannel) {
+          throw new NotFoundError('Channel not found');
+        }
+
+        // Only CEO can delete public channels
+        if (existingChannel.privacy_level === 'public' && request.user!.role !== 'ceo') {
+          throw new AuthorizationError('Only CEOs can delete public channels');
+        }
 
         const success = await channelRepository.softDelete(id, request.user!.userId);
         if (!success) {

@@ -612,17 +612,37 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
           throw new ValidationError('Channel not found');
         }
 
-        // Validate that assigned users are channel members
+        // Validate task assignments based on channel privacy
         if (request.body.assigned_to && request.body.assigned_to.length > 0) {
-          const channelMembers = channel.members || [];
-          const invalidAssignees = request.body.assigned_to.filter(
-            (userId: string) => !channelMembers.includes(userId)
-          );
+          // For public channels, allow assignment to any user in the application
+          if (channel.privacy_level === 'public') {
+            // Just validate that the assigned users exist (optional additional validation)
+            const { userRepository } = await import('@db/index');
+            const userChecks = await Promise.all(
+              request.body.assigned_to.map(async (userId: string) => {
+                const user = await userRepository.findById(userId);
+                return { userId, exists: !!user };
+              })
+            );
+            
+            const nonExistentUsers = userChecks.filter(check => !check.exists).map(check => check.userId);
+            if (nonExistentUsers.length > 0) {
+              throw new ValidationError('Some assigned users do not exist', [
+                { field: 'assigned_to', message: `Users ${nonExistentUsers.join(', ')} do not exist`, value: nonExistentUsers }
+              ]);
+            }
+          } else {
+            // For private and restricted channels, validate that assigned users are channel members
+            const channelMembers = channel.members || [];
+            const invalidAssignees = request.body.assigned_to.filter(
+              (userId: string) => !channelMembers.includes(userId)
+            );
 
-          if (invalidAssignees.length > 0) {
-            throw new ValidationError('Tasks can only be assigned to channel members', [
-              { field: 'assigned_to', message: `Users ${invalidAssignees.join(', ')} are not members of this channel`, value: invalidAssignees }
-            ]);
+            if (invalidAssignees.length > 0) {
+              throw new ValidationError('Tasks in private/restricted channels can only be assigned to channel members', [
+                { field: 'assigned_to', message: `Users ${invalidAssignees.join(', ')} are not members of this channel`, value: invalidAssignees }
+              ]);
+            }
           }
         }
 
@@ -1557,17 +1577,37 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
           throw new ValidationError('Channel not found');
         }
 
-        // Validate that assigned users are channel members
+        // Validate task assignments based on channel privacy
         if (request.body.assigned_to && request.body.assigned_to.length > 0) {
-          const channelMembers = channel.members || [];
-          const invalidAssignees = request.body.assigned_to.filter(
-            (userId: string) => !channelMembers.includes(userId)
-          );
+          // For public channels, allow assignment to any user in the application
+          if (channel.privacy_level === 'public') {
+            // Just validate that the assigned users exist (optional additional validation)
+            const { userRepository } = await import('@db/index');
+            const userChecks = await Promise.all(
+              request.body.assigned_to.map(async (userId: string) => {
+                const user = await userRepository.findById(userId);
+                return { userId, exists: !!user };
+              })
+            );
+            
+            const nonExistentUsers = userChecks.filter(check => !check.exists).map(check => check.userId);
+            if (nonExistentUsers.length > 0) {
+              throw new ValidationError('Some assigned users do not exist', [
+                { field: 'assigned_to', message: `Users ${nonExistentUsers.join(', ')} do not exist`, value: nonExistentUsers }
+              ]);
+            }
+          } else {
+            // For private and restricted channels, validate that assigned users are channel members
+            const channelMembers = channel.members || [];
+            const invalidAssignees = request.body.assigned_to.filter(
+              (userId: string) => !channelMembers.includes(userId)
+            );
 
-          if (invalidAssignees.length > 0) {
-            throw new ValidationError('Tasks can only be assigned to channel members', [
-              { field: 'assigned_to', message: `Users ${invalidAssignees.join(', ')} are not members of this channel`, value: invalidAssignees }
-            ]);
+            if (invalidAssignees.length > 0) {
+              throw new ValidationError('Tasks in private/restricted channels can only be assigned to channel members', [
+                { field: 'assigned_to', message: `Users ${invalidAssignees.join(', ')} are not members of this channel`, value: invalidAssignees }
+              ]);
+            }
           }
         }
 

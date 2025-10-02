@@ -147,7 +147,7 @@ async function addTaskComments() {
       }
     }
 
-    logger.info(`\n🎉 Comment seeding completed!`);
+    logger.info(`\n🎉 Comment generation completed!`);
     logger.info(`📊 Statistics:`);
     logger.info(`  - Comments added: ${commentsAdded}`);
     logger.info(`  - Reactions added: ${reactionsAdded}`);
@@ -178,7 +178,7 @@ if (require.main === module) {
       console.log(`Tasks: ${result.tasksProcessed}`);
       process.exit(0);
     }).catch((error) => {
-      console.error('Seeding failed:', error);
+      console.error('Comment generation failed:', error);
       process.exit(1);
     });
   });

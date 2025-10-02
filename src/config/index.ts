@@ -55,7 +55,6 @@ const envSchema = z.object({
   LOG_FORMAT: z.enum(['json', 'pretty']).default('json'),
 
   // Development
-  SEED_DATABASE: z.string().transform(Boolean).default('false'),
   DEBUG_SQL: z.string().transform(Boolean).default('false'),
   DEBUG_WEBSOCKET: z.string().transform(Boolean).default('false'),
 });
@@ -154,7 +153,6 @@ export const config = {
 
   // Development configuration
   development: {
-    seedDatabase: env.SEED_DATABASE,
     debugSql: env.DEBUG_SQL,
     debugWebSocket: env.DEBUG_WEBSOCKET,
   },

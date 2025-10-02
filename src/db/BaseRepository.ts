@@ -478,7 +478,7 @@ export abstract class BaseRepository<T extends BaseEntity> {
   }
 
   /**
-   * Bulk insert entities (for seeding and imports)
+   * Bulk insert entities (for data imports)
    */
   async bulkCreate(
     entities: Partial<Omit<T, keyof BaseEntity>>[],

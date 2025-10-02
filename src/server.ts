@@ -687,17 +687,6 @@ class APIServer {
         throw error;
       }
 
-      // Run database seeding (only in development)
-      if (config.app.isDevelopment) {
-        const seedTimer = startupLogger.createTimer('Database Seeding');
-        try {
-          logger.debug('Skipping database seeding (data already exists)');
-          services.push({ name: 'Database Seeding', status: true, duration: seedTimer.end() });
-        } catch (error) {
-          logger.warn({ error }, 'Database seeding failed, continuing without seed data');
-          services.push({ name: 'Database Seeding', status: false, duration: seedTimer.end() });
-        }
-      }
 
       // Initialize server
       const serverTimer = startupLogger.createTimer('Server Configuration');
