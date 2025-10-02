@@ -202,11 +202,11 @@ class MessageRepository extends BaseRepository<Message> {
           ELSE
             json_build_object(
               'id', m.user_id,
-              'name', 'Unknown User',
-              'email', '',
-              'avatar_url', null,
-              'role', 'staff',
-              'phone', ''
+              'name', COALESCE((SELECT name FROM users WHERE id = m.user_id), 'Unknown User'),
+              'email', COALESCE((SELECT email FROM users WHERE id = m.user_id), ''),
+              'avatar_url', (SELECT avatar_url FROM users WHERE id = m.user_id),
+              'role', COALESCE((SELECT role FROM users WHERE id = m.user_id), 'staff'),
+              'phone', (SELECT phone FROM users WHERE id = m.user_id)
             )
         END as user_details,
         -- Reply to message info
@@ -249,7 +249,7 @@ class MessageRepository extends BaseRepository<Message> {
         thread_stats.last_reply_timestamp,
         deleter.name as deleted_by_name
       FROM ${this.tableName} m
-      LEFT JOIN users u ON m.user_id = u.id
+      LEFT JOIN users u ON m.user_id = u.id AND u.deleted_at IS NULL
       LEFT JOIN users deleter ON m.deleted_by = deleter.id
       -- Reply to message join
       LEFT JOIN messages reply_msg ON m.reply_to_id = reply_msg.id
@@ -393,18 +393,18 @@ class MessageRepository extends BaseRepository<Message> {
           ELSE
             json_build_object(
               'id', m.user_id,
-              'name', 'Unknown User',
-              'email', '',
-              'avatar_url', null,
-              'role', 'staff',
-              'phone', ''
+              'name', COALESCE((SELECT name FROM users WHERE id = m.user_id), 'Unknown User'),
+              'email', COALESCE((SELECT email FROM users WHERE id = m.user_id), ''),
+              'avatar_url', (SELECT avatar_url FROM users WHERE id = m.user_id),
+              'role', COALESCE((SELECT role FROM users WHERE id = m.user_id), 'staff'),
+              'phone', (SELECT phone FROM users WHERE id = m.user_id)
             )
         END as user_details,
         COALESCE(thread_stats.reply_count, 0) as reply_count,
         thread_stats.last_reply_timestamp,
         deleter.name as deleted_by_name
       FROM ${this.tableName} m
-      LEFT JOIN users u ON m.user_id = u.id
+      LEFT JOIN users u ON m.user_id = u.id AND u.deleted_at IS NULL
       LEFT JOIN users deleter ON m.deleted_by = deleter.id
       LEFT JOIN (
         SELECT 
@@ -449,16 +449,16 @@ class MessageRepository extends BaseRepository<Message> {
           ELSE
             json_build_object(
               'id', m.user_id,
-              'name', 'Unknown User',
-              'email', '',
-              'avatar_url', null,
-              'role', 'staff',
-              'phone', ''
+              'name', COALESCE((SELECT name FROM users WHERE id = m.user_id), 'Unknown User'),
+              'email', COALESCE((SELECT email FROM users WHERE id = m.user_id), ''),
+              'avatar_url', (SELECT avatar_url FROM users WHERE id = m.user_id),
+              'role', COALESCE((SELECT role FROM users WHERE id = m.user_id), 'staff'),
+              'phone', (SELECT phone FROM users WHERE id = m.user_id)
             )
         END as user_details,
         deleter.name as deleted_by_name
       FROM ${this.tableName} m
-      LEFT JOIN users u ON m.user_id = u.id
+      LEFT JOIN users u ON m.user_id = u.id AND u.deleted_at IS NULL
       LEFT JOIN users deleter ON m.deleted_by = deleter.id
       WHERE m.channel_id = $1 
         AND m.deleted_at IS NULL
@@ -726,16 +726,16 @@ class MessageRepository extends BaseRepository<Message> {
           ELSE
             json_build_object(
               'id', m.user_id,
-              'name', 'Unknown User',
-              'email', '',
-              'avatar_url', null,
-              'role', 'staff',
-              'phone', ''
+              'name', COALESCE((SELECT name FROM users WHERE id = m.user_id), 'Unknown User'),
+              'email', COALESCE((SELECT email FROM users WHERE id = m.user_id), ''),
+              'avatar_url', (SELECT avatar_url FROM users WHERE id = m.user_id),
+              'role', COALESCE((SELECT role FROM users WHERE id = m.user_id), 'staff'),
+              'phone', (SELECT phone FROM users WHERE id = m.user_id)
             )
         END as user_details,
         deleter.name as deleted_by_name
       FROM ${this.tableName} m
-      LEFT JOIN users u ON m.user_id = u.id
+      LEFT JOIN users u ON m.user_id = u.id AND u.deleted_at IS NULL
       LEFT JOIN users deleter ON m.deleted_by = deleter.id
       WHERE (m.id = $1 OR m.thread_root_id = $1)
         AND m.deleted_at IS NULL
@@ -775,16 +775,16 @@ class MessageRepository extends BaseRepository<Message> {
           ELSE
             json_build_object(
               'id', m.user_id,
-              'name', 'Unknown User',
-              'email', '',
-              'avatar_url', null,
-              'role', 'staff',
-              'phone', ''
+              'name', COALESCE((SELECT name FROM users WHERE id = m.user_id), 'Unknown User'),
+              'email', COALESCE((SELECT email FROM users WHERE id = m.user_id), ''),
+              'avatar_url', (SELECT avatar_url FROM users WHERE id = m.user_id),
+              'role', COALESCE((SELECT role FROM users WHERE id = m.user_id), 'staff'),
+              'phone', (SELECT phone FROM users WHERE id = m.user_id)
             )
         END as user_details,
         deleter.name as deleted_by_name
       FROM ${this.tableName} m
-      LEFT JOIN users u ON m.user_id = u.id
+      LEFT JOIN users u ON m.user_id = u.id AND u.deleted_at IS NULL
       LEFT JOIN users deleter ON m.deleted_by = deleter.id
       WHERE m.channel_id = $1 
         AND m.is_pinned = true
@@ -830,7 +830,7 @@ class MessageRepository extends BaseRepository<Message> {
         u.name as user_name,
         COUNT(*) as message_count
       FROM ${this.tableName} m
-      LEFT JOIN users u ON m.user_id = u.id
+      LEFT JOIN users u ON m.user_id = u.id AND u.deleted_at IS NULL
       WHERE m.channel_id = $1 AND m.deleted_at IS NULL
       GROUP BY m.user_id, u.name
       ORDER BY message_count DESC
