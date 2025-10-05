@@ -292,9 +292,9 @@ const registerMessageRoutes = async (fastify) => {
             const isThreadReply = message.reply_to_id && message.thread_root_id;
             // Get fresh user data for accurate broadcasting
             const sender = await index_1.userRepository.findById(request.user.userId);
-            const senderName = sender?.name || request.user.name || 'Unknown User';
-            const senderEmail = sender?.email || request.user.email || '';
-            const senderAvatar = sender?.avatar_url;
+            if (!sender) {
+                throw new Error('User not found - authenticated user must exist in database');
+            }
             // Broadcast message to channel members with thread context
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_sent', {
                 type: 'message_sent',
@@ -307,10 +307,14 @@ const registerMessageRoutes = async (fastify) => {
                     id: message.id,
                     channel_id: message.channel_id,
                     user_id: message.user_id,
-                    user_name: senderName,
-                    user_email: senderEmail,
-                    user_avatar: senderAvatar,
-                    user_role: request.user.role,
+                    user_details: {
+                        id: sender.id,
+                        name: sender.name,
+                        email: sender.email,
+                        avatar_url: sender.avatar_url,
+                        role: sender.role,
+                        phone: sender.phone || '',
+                    },
                     content: message.content,
                     message_type: message.message_type,
                     voice_data: message.voice_data,
@@ -332,9 +336,9 @@ const registerMessageRoutes = async (fastify) => {
                     updated_at: message.updated_at,
                     edited_at: message.edited_at,
                 },
-                userId: request.user.userId,
-                userName: senderName,
-                userRole: request.user.role,
+                userId: sender.id,
+                userName: sender.name,
+                userRole: sender.role,
                 timestamp: new Date().toISOString(),
             });
             // If this is a thread reply, also send a separate thread-specific event
@@ -349,10 +353,14 @@ const registerMessageRoutes = async (fastify) => {
                         id: message.id,
                         channel_id: message.channel_id,
                         user_id: message.user_id,
-                        user_name: senderName,
-                        user_email: senderEmail,
-                        user_avatar: senderAvatar,
-                        user_role: request.user.role,
+                        user_details: {
+                            id: sender.id,
+                            name: sender.name,
+                            email: sender.email,
+                            avatar_url: sender.avatar_url,
+                            role: sender.role,
+                            phone: sender.phone || '',
+                        },
                         content: message.content,
                         message_type: message.message_type,
                         voice_data: message.voice_data,
@@ -374,9 +382,9 @@ const registerMessageRoutes = async (fastify) => {
                         updated_at: message.updated_at,
                         edited_at: message.edited_at,
                     },
-                    userId: request.user.userId,
-                    userName: senderName,
-                    userRole: request.user.role,
+                    userId: sender.id,
+                    userName: sender.name,
+                    userRole: sender.role,
                     timestamp: new Date().toISOString(),
                 });
             }
@@ -486,16 +494,18 @@ const registerMessageRoutes = async (fastify) => {
             });
             // Get fresh user data for accurate broadcasting
             const sender = await index_1.userRepository.findById(request.user.userId);
-            const senderName = sender?.name || request.user.name || 'Unknown User';
+            if (!sender) {
+                throw new Error('User not found - authenticated user must exist in database');
+            }
             // Broadcast message edit
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_updated', {
                 type: 'message_updated',
                 channelId,
                 messageId,
                 message: message,
-                userId: request.user.userId,
-                userName: senderName,
-                userRole: request.user.role,
+                userId: sender.id,
+                userName: sender.name,
+                userRole: sender.role,
                 timestamp: new Date().toISOString(),
             });
             logger_1.loggers.api.info({
@@ -575,15 +585,17 @@ const registerMessageRoutes = async (fastify) => {
             await CacheService_1.cacheService.messages.delete(cache_decorators_1.CacheKeyUtils.messageKey(messageId));
             // Get fresh user data for accurate broadcasting
             const sender = await index_1.userRepository.findById(request.user.userId);
-            const senderName = sender?.name || request.user.name || 'Unknown User';
+            if (!sender) {
+                throw new Error('User not found - authenticated user must exist in database');
+            }
             // Broadcast message deletion
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_deleted', {
                 type: 'message_deleted',
                 channelId,
                 messageId,
-                userId: request.user.userId,
-                userName: senderName,
-                userRole: request.user.role,
+                userId: sender.id,
+                userName: sender.name,
+                userRole: sender.role,
                 timestamp: new Date().toISOString(),
             });
             logger_1.loggers.api.info({
@@ -750,16 +762,18 @@ const registerMessageRoutes = async (fastify) => {
             }
             // Get fresh user data for accurate broadcasting
             const sender = await index_1.userRepository.findById(request.user.userId);
-            const senderName = sender?.name || request.user.name || 'Unknown User';
+            if (!sender) {
+                throw new Error('User not found - authenticated user must exist in database');
+            }
             // Broadcast pin status change
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_pinned', {
                 type: pinned ? 'message_pinned' : 'message_unpinned',
                 channelId,
                 messageId,
                 pinned,
-                userId: request.user.userId,
-                userName: senderName,
-                userRole: request.user.role,
+                userId: sender.id,
+                userName: sender.name,
+                userRole: sender.role,
                 timestamp: new Date().toISOString(),
             });
             logger_1.loggers.api.info({
@@ -850,7 +864,9 @@ const registerMessageRoutes = async (fastify) => {
             await index_1.channelRepository.updateActivity(channelId);
             // Get fresh user data for accurate broadcasting
             const sender = await index_1.userRepository.findById(request.user.userId);
-            const senderName = sender?.name || request.user.name || 'Unknown User';
+            if (!sender) {
+                throw new Error('User not found - authenticated user must exist in database');
+            }
             // Broadcast thread reply
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'thread_reply_sent', {
                 type: 'thread_reply_sent',
@@ -859,9 +875,9 @@ const registerMessageRoutes = async (fastify) => {
                 parentMessageId: messageId,
                 messageId: reply_message.id,
                 message: reply_message,
-                userId: request.user.userId,
-                userName: senderName,
-                userRole: request.user.role,
+                userId: sender.id,
+                userName: sender.name,
+                userRole: sender.role,
                 timestamp: new Date().toISOString(),
             });
             logger_1.loggers.api.info({
@@ -934,16 +950,18 @@ const registerMessageRoutes = async (fastify) => {
             }
             // Get fresh user data for accurate broadcasting
             const sender = await index_1.userRepository.findById(request.user.userId);
-            const senderName = sender?.name || request.user.name || 'Unknown User';
+            if (!sender) {
+                throw new Error('User not found - authenticated user must exist in database');
+            }
             // Broadcast unpin status change
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_unpinned', {
                 type: 'message_unpinned',
                 channelId,
                 messageId,
                 pinned: false,
-                userId: request.user.userId,
-                userName: senderName,
-                userRole: request.user.role,
+                userId: sender.id,
+                userName: sender.name,
+                userRole: sender.role,
                 timestamp: new Date().toISOString(),
             });
             logger_1.loggers.api.info({
@@ -1111,7 +1129,9 @@ const registerMessageRoutes = async (fastify) => {
             await index_1.channelRepository.updateActivity(channelId);
             // Get fresh user data for accurate broadcasting
             const sender = await index_1.userRepository.findById(request.user.userId);
-            const senderName = sender?.name || request.user.name || 'Unknown User';
+            if (!sender) {
+                throw new Error('User not found - authenticated user must exist in database');
+            }
             // Broadcast direct reply
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_reply_sent', {
                 type: 'message_reply_sent',
@@ -1119,9 +1139,9 @@ const registerMessageRoutes = async (fastify) => {
                 parentMessageId: messageId,
                 messageId: replyMessage.id,
                 message: replyMessage,
-                userId: request.user.userId,
-                userName: senderName,
-                userRole: request.user.role,
+                userId: sender.id,
+                userName: sender.name,
+                userRole: sender.role,
                 timestamp: new Date().toISOString(),
             });
             logger_1.loggers.api.info({
@@ -1215,7 +1235,9 @@ const registerMessageRoutes = async (fastify) => {
             });
             // Get fresh user data for accurate broadcasting
             const sender = await index_1.userRepository.findById(request.user.userId);
-            const senderName = sender?.name || request.user.name || 'Unknown User';
+            if (!sender) {
+                throw new Error('User not found - authenticated user must exist in database');
+            }
             // Broadcast reply update
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'reply_updated', {
                 type: 'reply_updated',
@@ -1225,9 +1247,9 @@ const registerMessageRoutes = async (fastify) => {
                 isThreadReply: !!existingReply.thread_root_id,
                 threadRootId: existingReply.thread_root_id,
                 reply: updatedReply,
-                userId: request.user.userId,
-                userName: senderName,
-                userRole: request.user.role,
+                userId: sender.id,
+                userName: sender.name,
+                userRole: sender.role,
                 timestamp: new Date().toISOString(),
             });
             logger_1.loggers.api.info({
@@ -1313,7 +1335,9 @@ const registerMessageRoutes = async (fastify) => {
             await CacheService_1.cacheService.messages.delete(cache_decorators_1.CacheKeyUtils.messageKey(replyId));
             // Get fresh user data for accurate broadcasting
             const sender = await index_1.userRepository.findById(request.user.userId);
-            const senderName = sender?.name || request.user.name || 'Unknown User';
+            if (!sender) {
+                throw new Error('User not found - authenticated user must exist in database');
+            }
             // Broadcast reply deletion
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'reply_deleted', {
                 type: 'reply_deleted',
@@ -1322,9 +1346,9 @@ const registerMessageRoutes = async (fastify) => {
                 replyId,
                 isThreadReply: !!existingReply.thread_root_id,
                 threadRootId: existingReply.thread_root_id,
-                userId: request.user.userId,
-                userName: senderName,
-                userRole: request.user.role,
+                userId: sender.id,
+                userName: sender.name,
+                userRole: sender.role,
                 timestamp: new Date().toISOString(),
             });
             logger_1.loggers.api.info({
@@ -1481,7 +1505,9 @@ const registerMessageRoutes = async (fastify) => {
             const result = await index_1.reactionRepository.toggleReaction(messageId, request.user.userId, emoji);
             // Get fresh user data for accurate broadcasting
             const sender = await index_1.userRepository.findById(request.user.userId);
-            const senderName = sender?.name || request.user.name || 'Unknown User';
+            if (!sender) {
+                throw new Error('User not found - authenticated user must exist in database');
+            }
             // Broadcast reaction update
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_reaction_updated', {
                 type: 'message_reaction_updated',
@@ -1489,9 +1515,9 @@ const registerMessageRoutes = async (fastify) => {
                 messageId,
                 emoji,
                 action: result.action,
-                userId: request.user.userId,
-                userName: senderName,
-                userRole: request.user.role,
+                userId: sender.id,
+                userName: sender.name,
+                userRole: sender.role,
                 timestamp: new Date().toISOString(),
             });
             logger_1.loggers.api.info({
@@ -1568,7 +1594,9 @@ const registerMessageRoutes = async (fastify) => {
             }
             // Get fresh user data for accurate broadcasting
             const sender = await index_1.userRepository.findById(request.user.userId);
-            const senderName = sender?.name || request.user.name || 'Unknown User';
+            if (!sender) {
+                throw new Error('User not found - authenticated user must exist in database');
+            }
             // Broadcast reaction removal
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_reaction_updated', {
                 type: 'message_reaction_updated',
@@ -1576,9 +1604,9 @@ const registerMessageRoutes = async (fastify) => {
                 messageId,
                 emoji,
                 action: 'removed',
-                userId: request.user.userId,
-                userName: senderName,
-                userRole: request.user.role,
+                userId: sender.id,
+                userName: sender.name,
+                userRole: sender.role,
                 timestamp: new Date().toISOString(),
             });
             logger_1.loggers.api.info({

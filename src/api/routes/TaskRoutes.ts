@@ -1388,9 +1388,18 @@ export const registerTaskRoutes = async (fastify: FastifyInstance) => {
       try {
         const { user_id } = request.query;
 
-        // Only CEO can view stats for other users
-        const targetUserId =
-          user_id && request.user!.role === 'ceo' ? user_id : request.user!.userId;
+        // Apply consistent role-based access control like task listing endpoint
+        // CEO: sees stats for all tasks (unless specifically filtering by user_id)
+        // Manager/Staff: only see stats for tasks assigned to them
+        let targetUserId: string | undefined;
+        
+        if (request.user!.role === 'ceo') {
+          // CEO can view stats for specific user if user_id provided, otherwise all tasks (undefined)
+          targetUserId = user_id || undefined;
+        } else {
+          // Non-CEO users only see stats for their assigned tasks
+          targetUserId = request.user!.userId;
+        }
 
         const stats = await taskRepository.getTaskStats(targetUserId);
 
