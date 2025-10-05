@@ -126,7 +126,7 @@ class ChannelRepository extends BaseRepository_1.default {
       FROM ${this.tableName}
       WHERE deleted_at IS NULL
       AND (
-        -- Public channels
+        -- Public channels are visible to everyone
         privacy_level = 'public' 
         -- User is a member
         OR $1 = ANY(members)
@@ -349,7 +349,7 @@ class ChannelRepository extends BaseRepository_1.default {
       LEFT JOIN users owner ON c.owned_by = owner.id
       WHERE c.deleted_at IS NULL
       AND (
-        -- Public channels
+        -- Public channels are visible to everyone
         c.privacy_level = 'public' 
         -- User is a member
         OR $1 = ANY(c.members)

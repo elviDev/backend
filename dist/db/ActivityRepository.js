@@ -555,11 +555,15 @@ class ActivityRepository extends BaseRepository_1.default {
         switch (activityType) {
             case 'task_created':
             case 'task_assigned':
+            case 'member_added':
+            case 'member_removed':
                 return 'medium';
+            case 'task_unassigned':
+            case 'channel_updated':
+                return 'low';
             case 'task_completed':
                 return 'low';
             case 'mention':
-                return 'high';
             case 'voice_command':
                 return 'high';
             default:
@@ -575,12 +579,16 @@ class ActivityRepository extends BaseRepository_1.default {
             case 'task_updated':
             case 'task_completed':
             case 'task_assigned':
+            case 'task_unassigned':
                 return 'task';
             case 'message':
             case 'member_joined':
             case 'member_left':
+            case 'member_added':
+            case 'member_removed':
             case 'channel_updated':
             case 'channel_created':
+            case 'channel_deleted':
                 return 'channel';
             case 'mention':
             case 'reaction_added':

@@ -84,7 +84,7 @@ export declare abstract class BaseRepository<T extends BaseEntity> {
      */
     executeInTransaction<R>(callback: (client: PoolClient) => Promise<R>): Promise<R>;
     /**
-     * Bulk insert entities (for seeding and imports)
+     * Bulk insert entities (for data imports)
      */
     bulkCreate(entities: Partial<Omit<T, keyof BaseEntity>>[], client?: DatabaseClient): Promise<T[]>;
     /**

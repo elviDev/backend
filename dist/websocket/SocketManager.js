@@ -495,6 +495,16 @@ class SocketManager {
      */
     async handleChatMessage(socket, data) {
         try {
+            if (!socket.userId) {
+                socket.emit('error', { message: 'Authentication required' });
+                return;
+            }
+            // Fetch fresh user data to ensure accurate information
+            const user = await index_2.userRepository.findById(socket.userId);
+            if (!user || user.deleted_at) {
+                socket.emit('error', { message: 'User account not found' });
+                return;
+            }
             // TODO: Validate message content and user permissions
             const messageEvent = {
                 type: 'chat_message',
@@ -502,12 +512,14 @@ class SocketManager {
                     channelId: data.channelId,
                     message: data.message,
                     messageType: data.type || 'text',
-                    userId: socket.userId || 'unknown',
-                    userName: socket.userName || 'Unknown User',
-                    userRole: socket.userRole || 'staff',
+                    userId: user.id,
+                    userName: user.name,
+                    userEmail: user.email,
+                    userAvatar: user.avatar_url,
+                    userRole: user.role,
                 },
                 timestamp: new Date(),
-                userId: socket.userId || 'unknown',
+                userId: user.id,
                 channelId: data.channelId,
             };
             // Broadcast to channel members
@@ -515,7 +527,8 @@ class SocketManager {
             // TODO: Store message in database
             // await messageService.createMessage(messageEvent.payload);
             logger_1.loggers.websocket.debug?.({
-                userId: socket.userId,
+                userId: user.id,
+                userName: user.name,
                 channelId: data.channelId,
                 messageType: data.type,
             }, 'Chat message sent');

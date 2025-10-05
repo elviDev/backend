@@ -296,7 +296,7 @@ class BaseRepository {
         return (0, database_1.transaction)(callback);
     }
     /**
-     * Bulk insert entities (for seeding and imports)
+     * Bulk insert entities (for data imports)
      */
     async bulkCreate(entities, client) {
         if (entities.length === 0) {

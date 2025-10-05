@@ -1,4 +1,4 @@
-import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import { FastifyInstance, FastifyRequest } from 'fastify';
 import { Type } from '@sinclair/typebox';
 import { channelRepository, messageRepository, activityRepository, fileRepository } from '@db/index';
 import { Activity } from '../../db/ActivityRepository';
@@ -181,11 +181,6 @@ class ChannelService {
 
     // Handle member updates if provided
     if (updateData.members !== undefined && Array.isArray(updateData.members)) {
-      loggers.api.info(
-        { channelId, memberCount: updateData.members.length },
-        'Processing member updates in channel update'
-      );
-
       // Get current members to compare
       const currentMembers = await channelRepository.getMembers(channelId);
       const currentMemberIds = new Set(currentMembers.map(m => m.id)); // Fixed: use m.id instead of m.user_id
@@ -199,16 +194,46 @@ class ChannelService {
         !newMemberIds.has(m.id) // Fixed: use m.id instead of m.user_id
       );
 
-      // Add new members
-      for (const member of membersToAdd) {
+      loggers.api.info(
+        { channelId, memberCount: updateData.members.length, addCount: membersToAdd.length, removeCount: membersToRemove.length },
+        'Processing member updates in channel update'
+      );
+      
+      // Warn if this might take a long time
+      const totalOperations = membersToAdd.length + membersToRemove.length;
+      if (totalOperations > 10) {
+        loggers.api.warn(
+          { channelId, totalOperations },
+          'Large member update operation - this may take some time'
+        );
+      }
+
+      // Add new members with progress tracking
+      if (membersToAdd.length > 0) {
+        loggers.api.info(
+          { channelId, memberCount: membersToAdd.length },
+          'Starting to add members to channel'
+        );
+      }
+      
+      for (const [index, member] of membersToAdd.entries()) {
         const userId = member.user_id || member.id;
         const role = member.role || 'member';
         
         try {
-          await channelRepository.addMember(channelId, userId, currentUserId);
+          const success = await channelRepository.addMember(channelId, userId, currentUserId);
+          
+          if (!success) {
+            // User is already a member - this is not an error, just skip notifications
+            loggers.api.info(
+              { channelId, userId, progress: `${index + 1}/${membersToAdd.length}` },
+              'User was already a member, skipping notifications'
+            );
+            continue;
+          }
           
           loggers.api.info(
-            { channelId, addedUserId: userId, role },
+            { channelId, addedUserId: userId, role, progress: `${index + 1}/${membersToAdd.length}` },
             'Member added during channel update'
           );
 
@@ -247,16 +272,24 @@ class ChannelService {
             { channelId, userId, error: error instanceof Error ? error.message : 'Unknown error' },
             'Failed to add member during channel update'
           );
+          // Continue to next member instead of failing the entire operation
         }
       }
 
       // Remove members that are no longer in the list
-      for (const member of membersToRemove) {
+      if (membersToRemove.length > 0) {
+        loggers.api.info(
+          { channelId, memberCount: membersToRemove.length },
+          'Starting to remove members from channel'
+        );
+      }
+      
+      for (const [index, member] of membersToRemove.entries()) {
         try {
           await channelRepository.removeMember(channelId, member.id, currentUserId); // Fixed: use member.id instead of member.user_id
           
           loggers.api.info(
-            { channelId, removedUserId: member.id }, // Fixed: use member.id
+            { channelId, removedUserId: member.id, progress: `${index + 1}/${membersToRemove.length}` }, // Fixed: use member.id
             'Member removed during channel update'
           );
 

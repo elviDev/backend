@@ -4,7 +4,7 @@ export interface Activity extends BaseEntity {
     channel_id?: string;
     task_id?: string;
     user_id: string;
-    activity_type: 'message' | 'task_created' | 'task_updated' | 'task_completed' | 'task_assigned' | 'member_joined' | 'member_left' | 'file_uploaded' | 'channel_updated' | 'channel_created' | 'reaction_added' | 'mention' | 'voice_command' | 'ai_response';
+    activity_type: 'message' | 'task_created' | 'task_updated' | 'task_completed' | 'task_assigned' | 'task_unassigned' | 'member_joined' | 'member_left' | 'member_added' | 'member_removed' | 'file_uploaded' | 'channel_updated' | 'channel_created' | 'channel_deleted' | 'reaction_added' | 'mention' | 'voice_command' | 'ai_response';
     title: string;
     description?: string;
     metadata: Record<string, any>;

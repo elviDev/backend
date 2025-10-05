@@ -19,6 +19,7 @@ const CacheService_1 = require("../../services/CacheService");
 const cache_decorators_1 = require("@utils/cache-decorators");
 const utils_1 = require("@websocket/utils");
 const SocketManager_1 = require("@websocket/SocketManager");
+const NotificationService_1 = require("../../services/NotificationService");
 const validation_1 = require("@utils/validation");
 /**
  * Channel Management API Routes
@@ -34,6 +35,12 @@ const CreateChannelSchema = typebox_1.Type.Object({
     settings: typebox_1.Type.Optional(typebox_1.Type.Record(typebox_1.Type.String(), typebox_1.Type.Any())),
     tags: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.String({ maxLength: 50 }))),
     color: typebox_1.Type.Optional(typebox_1.Type.String({ pattern: '^#[0-9A-Fa-f]{6}$' })),
+    members: typebox_1.Type.Optional(typebox_1.Type.Array(typebox_1.Type.Object({
+        user_id: typebox_1.Type.Optional(validation_1.UUIDSchema),
+        id: typebox_1.Type.Optional(validation_1.UUIDSchema),
+        name: typebox_1.Type.Optional(typebox_1.Type.String()),
+        role: typebox_1.Type.Optional(typebox_1.Type.String()),
+    }))),
 });
 const UpdateChannelSchema = typebox_1.Type.Object({
     name: typebox_1.Type.Optional(typebox_1.Type.String({ minLength: 1, maxLength: 100 })),
@@ -111,7 +118,7 @@ class ChannelService {
     async getAllChannelsForUser(userId, userRole) {
         return await index_1.channelRepository.findAccessibleByUserWithDetails(userId, userRole);
     }
-    async updateChannel(channelId, updateData, currentUserId) {
+    async updateChannel(channelId, updateData, currentUserId, currentUserName) {
         // Map frontend fields to backend fields
         const mappedData = {};
         if (updateData.name !== undefined)
@@ -160,7 +167,12 @@ class ChannelService {
                 const userId = member.user_id || member.id;
                 const role = member.role || 'member';
                 try {
-                    await index_1.channelRepository.addMember(channelId, userId, currentUserId);
+                    const success = await index_1.channelRepository.addMember(channelId, userId, currentUserId);
+                    if (!success) {
+                        // User is already a member - this is not an error, just skip notifications
+                        logger_1.loggers.api.info({ channelId, userId }, 'User was already a member, skipping notifications');
+                        continue;
+                    }
                     logger_1.loggers.api.info({ channelId, addedUserId: userId, role }, 'Member added during channel update');
                     // Send WebSocket event for new member
                     await utils_1.WebSocketUtils.sendToChannel(channelId, 'user_joined_channel', {
@@ -172,9 +184,26 @@ class ChannelService {
                         memberCount: currentMembers.length + membersToAdd.length - membersToRemove.length,
                         timestamp: new Date().toISOString(),
                     });
+                    // Send notification to the added user
+                    try {
+                        const channel = await index_1.channelRepository.findById(channelId);
+                        await NotificationService_1.notificationService.notifyMemberAdded(userId, {
+                            actorId: currentUserId,
+                            actorName: currentUserName || 'Someone',
+                            channelId: channelId,
+                            channelName: channel?.name || 'Unknown Channel',
+                            entityId: channelId,
+                            entityType: 'channel',
+                            metadata: { memberRole: role }
+                        });
+                    }
+                    catch (notifError) {
+                        logger_1.loggers.api.warn({ channelId, userId, error: notifError instanceof Error ? notifError.message : 'Unknown error' }, 'Failed to send member added notification');
+                    }
                 }
                 catch (error) {
                     logger_1.loggers.api.error({ channelId, userId, error: error instanceof Error ? error.message : 'Unknown error' }, 'Failed to add member during channel update');
+                    // Continue to next member instead of failing the entire operation
                 }
             }
             // Remove members that are no longer in the list
@@ -192,6 +221,22 @@ class ChannelService {
                         memberCount: currentMembers.length + membersToAdd.length - membersToRemove.length,
                         timestamp: new Date().toISOString(),
                     });
+                    // Send notification to the removed user
+                    try {
+                        const channel = await index_1.channelRepository.findById(channelId);
+                        await NotificationService_1.notificationService.notifyMemberRemoved(member.id, {
+                            actorId: currentUserId,
+                            actorName: currentUserName || 'Someone',
+                            channelId: channelId,
+                            channelName: channel?.name || 'Unknown Channel',
+                            entityId: channelId,
+                            entityType: 'channel',
+                            metadata: { removedMember: { id: member.id, name: member.name } }
+                        });
+                    }
+                    catch (notifError) {
+                        logger_1.loggers.api.warn({ channelId, userId: member.id, error: notifError instanceof Error ? notifError.message : 'Unknown error' }, 'Failed to send member removed notification');
+                    }
                 }
                 catch (error) {
                     logger_1.loggers.api.error({ channelId, userId: member.id, error: error instanceof Error ? error.message : 'Unknown error' }, // Fixed: use member.id
@@ -199,7 +244,29 @@ class ChannelService {
                 }
             }
         }
-        return await index_1.channelRepository.update(channelId, mappedData);
+        const updatedChannel = await index_1.channelRepository.update(channelId, mappedData);
+        // Send channel update notification to all members (excluding member changes which are handled above)
+        const hasNonMemberChanges = Object.keys(updateData).some(key => key !== 'members');
+        if (hasNonMemberChanges) {
+            try {
+                const allMembers = await index_1.channelRepository.getMembers(channelId);
+                const memberIds = allMembers.map(m => m.id);
+                const changes = Object.keys(updateData).filter(key => key !== 'members');
+                await NotificationService_1.notificationService.notifyChannelUpdated(memberIds, {
+                    actorId: currentUserId,
+                    actorName: currentUserName || 'Someone',
+                    channelId: channelId,
+                    channelName: updatedChannel?.name || 'Unknown Channel',
+                    entityId: channelId,
+                    entityType: 'channel',
+                    metadata: { changedFields: changes }
+                }, changes);
+            }
+            catch (notifError) {
+                logger_1.loggers.api.warn({ channelId, error: notifError instanceof Error ? notifError.message : 'Unknown error' }, 'Failed to send channel update notification');
+            }
+        }
+        return updatedChannel;
     }
     async createChannel(channelData) {
         return await index_1.channelRepository.createChannel(channelData);
@@ -221,7 +288,7 @@ __decorate([
         namespace: 'channels',
     }),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, Object, String]),
+    __metadata("design:paramtypes", [String, Object, String, String]),
     __metadata("design:returntype", Promise)
 ], ChannelService.prototype, "updateChannel", null);
 __decorate([
@@ -494,12 +561,32 @@ const registerChannelRoutes = async (fastify) => {
         },
     }, async (request, reply) => {
         try {
+            // Validate public channel creation - only CEO can create public channels
+            if (request.body.privacy === 'public' && request.user.role !== 'ceo') {
+                throw new errors_1.AuthorizationError('Only CEOs can create public channels');
+            }
+            // Process members data
+            const members = [];
+            if (request.body.members && Array.isArray(request.body.members)) {
+                // Extract user IDs from member objects
+                for (const member of request.body.members) {
+                    const userId = member.user_id || member.id;
+                    if (userId && typeof userId === 'string') {
+                        members.push(userId);
+                    }
+                }
+            }
+            // Always include the creator as a member
+            if (!members.includes(request.user.userId)) {
+                members.push(request.user.userId);
+            }
             const channelData = {
                 name: request.body.name,
                 description: request.body.description,
                 channel_type: request.body.type,
                 privacy_level: request.body.privacy,
                 created_by: request.user.userId,
+                members: members, // Include processed members
                 settings: request.body.settings || {},
                 project_info: {
                     tags: request.body.tags || [],
@@ -535,11 +622,13 @@ const registerChannelRoutes = async (fastify) => {
             catch (error) {
                 logger_1.loggers.api.warn?.({ error, channelId: channel.id }, 'Failed to create channel creation activity');
             }
+            // Fetch complete channel data with member details for WebSocket event
+            const completeChannel = await index_1.channelRepository.findWithMembers(channel.id);
             // Broadcast channel creation event to all users
             SocketManager_1.socketManager.broadcast('channel_created', {
                 type: 'channel_created',
                 channelId: channel.id,
-                channel: channel,
+                channel: completeChannel,
                 userId: request.user.userId,
                 userName: request.user.name,
                 userRole: request.user.role,
@@ -622,6 +711,19 @@ const registerChannelRoutes = async (fastify) => {
         try {
             const { id } = request.params;
             const updateData = request.body;
+            // Check if this is a public channel and validate CEO permissions
+            const existingChannel = await index_1.channelRepository.findById(id);
+            if (!existingChannel) {
+                throw new errors_1.NotFoundError('Channel not found');
+            }
+            // Only CEO can edit public channels
+            if (existingChannel.privacy_level === 'public' && request.user.role !== 'ceo') {
+                throw new errors_1.AuthorizationError('Only CEOs can edit public channels');
+            }
+            // If changing privacy to public, only CEO can do this
+            if (updateData.privacy === 'public' && request.user.role !== 'ceo') {
+                throw new errors_1.AuthorizationError('Only CEOs can change channels to public');
+            }
             // Debug: Log what data we received
             console.log('🔍 Channel update received:', {
                 channelId: id,
@@ -630,7 +732,7 @@ const registerChannelRoutes = async (fastify) => {
                 membersLength: updateData.members?.length,
                 membersType: typeof updateData.members
             });
-            const channel = await channelService.updateChannel(id, updateData, request.user.userId);
+            const channel = await channelService.updateChannel(id, updateData, request.user.userId, request.user.name);
             // Broadcast channel update
             await utils_1.WebSocketUtils.sendToChannel(id, 'channel_updated', {
                 type: 'channel_updated',
@@ -699,6 +801,15 @@ const registerChannelRoutes = async (fastify) => {
     }, async (request, reply) => {
         try {
             const { id } = request.params;
+            // Check if this is a public channel and validate CEO permissions
+            const existingChannel = await index_1.channelRepository.findById(id);
+            if (!existingChannel) {
+                throw new errors_1.NotFoundError('Channel not found');
+            }
+            // Only CEO can delete public channels
+            if (existingChannel.privacy_level === 'public' && request.user.role !== 'ceo') {
+                throw new errors_1.AuthorizationError('Only CEOs can delete public channels');
+            }
             const success = await index_1.channelRepository.softDelete(id, request.user.userId);
             if (!success) {
                 throw new errors_1.NotFoundError('Channel not found');

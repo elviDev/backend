@@ -72,7 +72,6 @@ export declare const config: {
         readonly format: "json" | "pretty";
     };
     readonly development: {
-        readonly seedDatabase: boolean;
         readonly debugSql: boolean;
         readonly debugWebSocket: boolean;
     };

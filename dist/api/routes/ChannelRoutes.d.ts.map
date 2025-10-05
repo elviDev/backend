@@ -1,1 +1,1 @@
-{"version":3,"file":"ChannelRoutes.d.ts","sourceRoot":"","sources":["../../../src/api/routes/ChannelRoutes.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,eAAe,EAAgC,MAAM,SAAS,CAAC;AA2QxE;;GAEG;AACH,eAAO,MAAM,qBAAqB,GAAU,SAAS,eAAe,kBA0vCnE,CAAC"}
+{"version":3,"file":"ChannelRoutes.d.ts","sourceRoot":"","sources":["../../../src/api/routes/ChannelRoutes.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,eAAe,EAAkB,MAAM,SAAS,CAAC;AA+V1D;;GAEG;AACH,eAAO,MAAM,qBAAqB,GAAU,SAAS,eAAe,kBA+yCnE,CAAC"}

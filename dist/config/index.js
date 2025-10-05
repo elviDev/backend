@@ -47,7 +47,6 @@ const envSchema = zod_1.z.object({
     LOG_LEVEL: zod_1.z.enum(['error', 'warn', 'info', 'debug']).default('info'),
     LOG_FORMAT: zod_1.z.enum(['json', 'pretty']).default('json'),
     // Development
-    SEED_DATABASE: zod_1.z.string().transform(Boolean).default('false'),
     DEBUG_SQL: zod_1.z.string().transform(Boolean).default('false'),
     DEBUG_WEBSOCKET: zod_1.z.string().transform(Boolean).default('false'),
 });
@@ -136,7 +135,6 @@ exports.config = {
     },
     // Development configuration
     development: {
-        seedDatabase: env.SEED_DATABASE,
         debugSql: env.DEBUG_SQL,
         debugWebSocket: env.DEBUG_WEBSOCKET,
     },

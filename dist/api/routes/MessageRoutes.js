@@ -290,6 +290,11 @@ const registerMessageRoutes = async (fastify) => {
             await index_1.channelRepository.updateActivity(channelId);
             // Determine if this is a thread message
             const isThreadReply = message.reply_to_id && message.thread_root_id;
+            // Get fresh user data for accurate broadcasting
+            const sender = await index_1.userRepository.findById(request.user.userId);
+            const senderName = sender?.name || request.user.name || 'Unknown User';
+            const senderEmail = sender?.email || request.user.email || '';
+            const senderAvatar = sender?.avatar_url;
             // Broadcast message to channel members with thread context
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_sent', {
                 type: 'message_sent',
@@ -302,9 +307,9 @@ const registerMessageRoutes = async (fastify) => {
                     id: message.id,
                     channel_id: message.channel_id,
                     user_id: message.user_id,
-                    user_name: request.user.name,
-                    user_email: request.user.email,
-                    user_avatar: undefined, // Avatar not available in token payload
+                    user_name: senderName,
+                    user_email: senderEmail,
+                    user_avatar: senderAvatar,
                     user_role: request.user.role,
                     content: message.content,
                     message_type: message.message_type,
@@ -328,7 +333,7 @@ const registerMessageRoutes = async (fastify) => {
                     edited_at: message.edited_at,
                 },
                 userId: request.user.userId,
-                userName: request.user.name,
+                userName: senderName,
                 userRole: request.user.role,
                 timestamp: new Date().toISOString(),
             });
@@ -344,9 +349,9 @@ const registerMessageRoutes = async (fastify) => {
                         id: message.id,
                         channel_id: message.channel_id,
                         user_id: message.user_id,
-                        user_name: request.user.name,
-                        user_email: request.user.email,
-                        user_avatar: undefined, // Avatar not available in token payload
+                        user_name: senderName,
+                        user_email: senderEmail,
+                        user_avatar: senderAvatar,
                         user_role: request.user.role,
                         content: message.content,
                         message_type: message.message_type,
@@ -370,7 +375,7 @@ const registerMessageRoutes = async (fastify) => {
                         edited_at: message.edited_at,
                     },
                     userId: request.user.userId,
-                    userName: request.user.name,
+                    userName: senderName,
                     userRole: request.user.role,
                     timestamp: new Date().toISOString(),
                 });
@@ -479,6 +484,9 @@ const registerMessageRoutes = async (fastify) => {
                 is_edited: true,
                 edited_at: new Date(),
             });
+            // Get fresh user data for accurate broadcasting
+            const sender = await index_1.userRepository.findById(request.user.userId);
+            const senderName = sender?.name || request.user.name || 'Unknown User';
             // Broadcast message edit
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_updated', {
                 type: 'message_updated',
@@ -486,7 +494,7 @@ const registerMessageRoutes = async (fastify) => {
                 messageId,
                 message: message,
                 userId: request.user.userId,
-                userName: request.user.name,
+                userName: senderName,
                 userRole: request.user.role,
                 timestamp: new Date().toISOString(),
             });
@@ -565,13 +573,16 @@ const registerMessageRoutes = async (fastify) => {
             }
             // Clear message cache
             await CacheService_1.cacheService.messages.delete(cache_decorators_1.CacheKeyUtils.messageKey(messageId));
+            // Get fresh user data for accurate broadcasting
+            const sender = await index_1.userRepository.findById(request.user.userId);
+            const senderName = sender?.name || request.user.name || 'Unknown User';
             // Broadcast message deletion
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_deleted', {
                 type: 'message_deleted',
                 channelId,
                 messageId,
                 userId: request.user.userId,
-                userName: request.user.name,
+                userName: senderName,
                 userRole: request.user.role,
                 timestamp: new Date().toISOString(),
             });
@@ -737,6 +748,9 @@ const registerMessageRoutes = async (fastify) => {
             if (!success) {
                 throw new errors_1.NotFoundError('Message not found');
             }
+            // Get fresh user data for accurate broadcasting
+            const sender = await index_1.userRepository.findById(request.user.userId);
+            const senderName = sender?.name || request.user.name || 'Unknown User';
             // Broadcast pin status change
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_pinned', {
                 type: pinned ? 'message_pinned' : 'message_unpinned',
@@ -744,7 +758,7 @@ const registerMessageRoutes = async (fastify) => {
                 messageId,
                 pinned,
                 userId: request.user.userId,
-                userName: request.user.name,
+                userName: senderName,
                 userRole: request.user.role,
                 timestamp: new Date().toISOString(),
             });
@@ -834,6 +848,9 @@ const registerMessageRoutes = async (fastify) => {
             const reply_message = await messageService.createMessage(replyData);
             // Update channel activity
             await index_1.channelRepository.updateActivity(channelId);
+            // Get fresh user data for accurate broadcasting
+            const sender = await index_1.userRepository.findById(request.user.userId);
+            const senderName = sender?.name || request.user.name || 'Unknown User';
             // Broadcast thread reply
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'thread_reply_sent', {
                 type: 'thread_reply_sent',
@@ -843,7 +860,7 @@ const registerMessageRoutes = async (fastify) => {
                 messageId: reply_message.id,
                 message: reply_message,
                 userId: request.user.userId,
-                userName: request.user.name,
+                userName: senderName,
                 userRole: request.user.role,
                 timestamp: new Date().toISOString(),
             });
@@ -915,6 +932,9 @@ const registerMessageRoutes = async (fastify) => {
             if (!success) {
                 throw new errors_1.NotFoundError('Message not found');
             }
+            // Get fresh user data for accurate broadcasting
+            const sender = await index_1.userRepository.findById(request.user.userId);
+            const senderName = sender?.name || request.user.name || 'Unknown User';
             // Broadcast unpin status change
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_unpinned', {
                 type: 'message_unpinned',
@@ -922,7 +942,7 @@ const registerMessageRoutes = async (fastify) => {
                 messageId,
                 pinned: false,
                 userId: request.user.userId,
-                userName: request.user.name,
+                userName: senderName,
                 userRole: request.user.role,
                 timestamp: new Date().toISOString(),
             });
@@ -1089,6 +1109,9 @@ const registerMessageRoutes = async (fastify) => {
             const replyMessage = await messageService.createMessage(replyData);
             // Update channel activity
             await index_1.channelRepository.updateActivity(channelId);
+            // Get fresh user data for accurate broadcasting
+            const sender = await index_1.userRepository.findById(request.user.userId);
+            const senderName = sender?.name || request.user.name || 'Unknown User';
             // Broadcast direct reply
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_reply_sent', {
                 type: 'message_reply_sent',
@@ -1097,7 +1120,7 @@ const registerMessageRoutes = async (fastify) => {
                 messageId: replyMessage.id,
                 message: replyMessage,
                 userId: request.user.userId,
-                userName: request.user.name,
+                userName: senderName,
                 userRole: request.user.role,
                 timestamp: new Date().toISOString(),
             });
@@ -1190,6 +1213,9 @@ const registerMessageRoutes = async (fastify) => {
                 is_edited: true,
                 edited_at: new Date(),
             });
+            // Get fresh user data for accurate broadcasting
+            const sender = await index_1.userRepository.findById(request.user.userId);
+            const senderName = sender?.name || request.user.name || 'Unknown User';
             // Broadcast reply update
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'reply_updated', {
                 type: 'reply_updated',
@@ -1200,7 +1226,7 @@ const registerMessageRoutes = async (fastify) => {
                 threadRootId: existingReply.thread_root_id,
                 reply: updatedReply,
                 userId: request.user.userId,
-                userName: request.user.name,
+                userName: senderName,
                 userRole: request.user.role,
                 timestamp: new Date().toISOString(),
             });
@@ -1285,6 +1311,9 @@ const registerMessageRoutes = async (fastify) => {
             }
             // Clear message cache
             await CacheService_1.cacheService.messages.delete(cache_decorators_1.CacheKeyUtils.messageKey(replyId));
+            // Get fresh user data for accurate broadcasting
+            const sender = await index_1.userRepository.findById(request.user.userId);
+            const senderName = sender?.name || request.user.name || 'Unknown User';
             // Broadcast reply deletion
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'reply_deleted', {
                 type: 'reply_deleted',
@@ -1294,7 +1323,7 @@ const registerMessageRoutes = async (fastify) => {
                 isThreadReply: !!existingReply.thread_root_id,
                 threadRootId: existingReply.thread_root_id,
                 userId: request.user.userId,
-                userName: request.user.name,
+                userName: senderName,
                 userRole: request.user.role,
                 timestamp: new Date().toISOString(),
             });
@@ -1450,6 +1479,9 @@ const registerMessageRoutes = async (fastify) => {
             }
             // Toggle reaction
             const result = await index_1.reactionRepository.toggleReaction(messageId, request.user.userId, emoji);
+            // Get fresh user data for accurate broadcasting
+            const sender = await index_1.userRepository.findById(request.user.userId);
+            const senderName = sender?.name || request.user.name || 'Unknown User';
             // Broadcast reaction update
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_reaction_updated', {
                 type: 'message_reaction_updated',
@@ -1458,7 +1490,7 @@ const registerMessageRoutes = async (fastify) => {
                 emoji,
                 action: result.action,
                 userId: request.user.userId,
-                userName: request.user.name,
+                userName: senderName,
                 userRole: request.user.role,
                 timestamp: new Date().toISOString(),
             });
@@ -1534,6 +1566,9 @@ const registerMessageRoutes = async (fastify) => {
             if (!success) {
                 throw new errors_1.NotFoundError('Failed to remove reaction');
             }
+            // Get fresh user data for accurate broadcasting
+            const sender = await index_1.userRepository.findById(request.user.userId);
+            const senderName = sender?.name || request.user.name || 'Unknown User';
             // Broadcast reaction removal
             await utils_1.WebSocketUtils.sendToChannel(channelId, 'message_reaction_updated', {
                 type: 'message_reaction_updated',
@@ -1542,7 +1577,7 @@ const registerMessageRoutes = async (fastify) => {
                 emoji,
                 action: 'removed',
                 userId: request.user.userId,
-                userName: request.user.name,
+                userName: senderName,
                 userRole: request.user.role,
                 timestamp: new Date().toISOString(),
             });

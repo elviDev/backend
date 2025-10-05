@@ -156,7 +156,7 @@ async function addTaskComments() {
                 logger_1.logger.error(`❌ Failed to add comments to task ${task.id}:`, error);
             }
         }
-        logger_1.logger.info(`\n🎉 Comment seeding completed!`);
+        logger_1.logger.info(`\n🎉 Comment generation completed!`);
         logger_1.logger.info(`📊 Statistics:`);
         logger_1.logger.info(`  - Comments added: ${commentsAdded}`);
         logger_1.logger.info(`  - Reactions added: ${reactionsAdded}`);
@@ -184,7 +184,7 @@ if (require.main === module) {
             console.log(`Tasks: ${result.tasksProcessed}`);
             process.exit(0);
         }).catch((error) => {
-            console.error('Seeding failed:', error);
+            console.error('Comment generation failed:', error);
             process.exit(1);
         });
     });

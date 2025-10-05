@@ -630,18 +630,6 @@ class APIServer {
                 services.push({ name: 'Database Migrations', status: false, duration: migrationTimer.end() });
                 throw error;
             }
-            // Run database seeding (only in development)
-            if (index_1.config.app.isDevelopment) {
-                const seedTimer = logger_1.startupLogger.createTimer('Database Seeding');
-                try {
-                    logger_1.logger.debug('Skipping database seeding (data already exists)');
-                    services.push({ name: 'Database Seeding', status: true, duration: seedTimer.end() });
-                }
-                catch (error) {
-                    logger_1.logger.warn({ error }, 'Database seeding failed, continuing without seed data');
-                    services.push({ name: 'Database Seeding', status: false, duration: seedTimer.end() });
-                }
-            }
             // Initialize server
             const serverTimer = logger_1.startupLogger.createTimer('Server Configuration');
             try {
