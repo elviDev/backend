@@ -26,6 +26,7 @@ import {
   SuccessResponseSchema 
 } from '@utils/validation';
 import ProfilePictureService from '../../files/upload/ProfilePictureService';
+import CloudinaryProfileService from '../../files/upload/CloudinaryProfileService';
 
 /**
  * User Management API Routes
@@ -145,6 +146,7 @@ class UserService {
 
 const userService = new UserService();
 const profilePictureService = new ProfilePictureService();
+const cloudinaryProfileService = new CloudinaryProfileService();
 
 /**
  * Register user routes
@@ -480,7 +482,7 @@ export const registerUserRoutes = async (fastify: FastifyInstance) => {
             const fileName = part.filename || 'profile-picture';
 
             // Validate image file with buffer analysis
-            const validation = profilePictureService.validateProfilePictureWithBuffer(fileName, contentType, buffer);
+            const validation = cloudinaryProfileService.validateProfilePictureWithBuffer(fileName, contentType, buffer);
             if (!validation.valid) {
               throw new ValidationError(`Profile picture validation failed: ${validation.error}`, [
                 { field: 'profilePicture', message: validation.error || 'Invalid profile picture' }
@@ -511,32 +513,38 @@ export const registerUserRoutes = async (fastify: FastifyInstance) => {
 
       // Handle profile picture upload if provided
       if (profilePictureFile) {
-        const organizationId = (request.user as any)?.organizationId || 'default-org';
+        const organizationId = (request.user as any)?.organizationId;
         
-        const uploadResult = await profilePictureService.initiateProfilePictureUpload({
+        const uploadResult = await cloudinaryProfileService.uploadProfilePicture({
           userId: id,
           organizationId,
+          buffer: profilePictureFile.buffer,
           fileName: profilePictureFile.fileName,
           contentType: profilePictureFile.contentType,
           fileSize: profilePictureFile.fileSize,
           description: 'Profile Picture Upload'
         });
 
-        if (uploadResult.success && uploadResult.uploadUrl) {
-          // Simulate S3 upload completion (in real implementation, this would be done via webhook or client callback)
-          // For now, we'll complete it immediately since we have the buffer
-          await profilePictureService.completeProfilePictureUpload(
-            uploadResult.fileId!,
-            id,
-            true
-          );
-          
+        if (uploadResult.success) {
           loggers.api.info({
             userId: request.user?.userId,
             targetUserId: id,
             fileName: profilePictureFile.fileName,
-            fileSize: `${Math.round(profilePictureFile.fileSize / 1024)}KB`
-          }, 'Profile picture uploaded during profile update');
+            fileSize: `${Math.round(profilePictureFile.fileSize / 1024)}KB`,
+            avatarUrl: uploadResult.avatarUrl
+          }, 'Profile picture uploaded to Cloudinary during profile update');
+
+          // Return the updated user from the upload result instead of updating separately
+          if (uploadResult.user) {
+            reply.send({
+              success: true,
+              data: uploadResult.user,
+              timestamp: new Date().toISOString()
+            });
+            return;
+          }
+        } else {
+          throw new Error(`Profile picture upload failed: ${uploadResult.error}`);
         }
       }
 
@@ -1079,10 +1087,10 @@ export const registerUserRoutes = async (fastify: FastifyInstance) => {
     try {
       const { id } = request.params;
 
-      const deleteResult = await profilePictureService.deleteProfilePicture(id);
+      const deleteResult = await cloudinaryProfileService.deleteProfilePicture(id);
 
-      if (!deleteResult) {
-        throw new Error('Failed to delete profile picture');
+      if (!deleteResult.success) {
+        throw new Error(deleteResult.error || 'Failed to delete profile picture');
       }
 
       // Clear user cache
@@ -1091,10 +1099,11 @@ export const registerUserRoutes = async (fastify: FastifyInstance) => {
       loggers.api.info({
         userId: request.user?.userId,
         targetUserId: id
-      }, 'Profile picture deleted successfully');
+      }, 'Profile picture deleted successfully from Cloudinary');
 
       reply.send({
         success: true,
+        data: deleteResult.user,
         message: 'Profile picture deleted successfully',
         timestamp: new Date().toISOString()
       });

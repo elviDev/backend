@@ -313,7 +313,7 @@ export class ProfilePictureService extends EventEmitter {
 
       // Clear user's avatar_url
       await userRepository.update(userId, {
-        avatar_url: null
+        avatar_url: undefined
       });
 
       logger.info('Profile picture deleted', {
